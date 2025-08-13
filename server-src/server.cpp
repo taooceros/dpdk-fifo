@@ -6,14 +6,13 @@
 #include <rte_ether.h>
 #include <rte_ring.h>
 
-#include "signaling.hpp"
-#include "sigproc.hpp"
+#include "srp.hpp"
 
-using namespace sigproc;
+using namespace srp;
 
 static int responder_thread_main(void *arg) {
   // Optional: echo payloads back to sender as a demonstration of duplex
-  SigEndpoint *ep = reinterpret_cast<SigEndpoint *>(arg);
+  SRPEndpoint *ep = reinterpret_cast<SRPEndpoint *>(arg);
   rte_ring *in = ep->inbound_ring();
   rte_ring *out = ep->outbound_ring();
 
@@ -21,7 +20,7 @@ static int responder_thread_main(void *arg) {
   uint64_t count = 0;
   const uint64_t report_interval = 100000; // report every 1M packets
   for (;;) {
-    SigRecv *msg = nullptr;
+    Payload *msg = nullptr;
     if (rte_ring_sc_dequeue(in, (void **)&msg) == 0) {
       count++;
       if (count == 1) {
@@ -35,13 +34,11 @@ static int responder_thread_main(void *arg) {
         last_time = now;
       }
 
-      SigSend *resp =
-          (SigSend *)rte_zmalloc(NULL, sizeof(SigSend), RTE_CACHE_LINE_SIZE);
-      resp->channel_id = msg->channel_id;
-      resp->opcode = SIG_OPCODE_DATA;
-      resp->payload_len = msg->payload_len;
-      rte_memcpy(resp->payload, msg->payload, resp->payload_len);
-      while (rte_ring_sp_enqueue(out, resp) == -ENOBUFS) {
+      Payload *resp =
+          (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
+      resp->size = msg->size;
+      rte_memcpy(resp->data, msg->data, resp->size);
+      while (rte_ring_sp_enqueue(out, (void **)&resp) == -ENOBUFS) {
         rte_pause();
       }
 
@@ -50,6 +47,16 @@ static int responder_thread_main(void *arg) {
     } else {
       rte_pause();
     }
+  }
+  return 0;
+}
+
+static int event_thread_main(void *arg) {
+  using namespace srp;
+  SRPEndpoint *ep = reinterpret_cast<SRPEndpoint *>(arg);
+  printf("Event thread running on lcore %u\n", rte_lcore_id());
+  for (;;) {
+    ep->progress();
   }
   return 0;
 }
@@ -64,15 +71,14 @@ int main(int argc, char **argv) {
   // No default peer; will learn from inbound frames and reply
   memset(&cfg.default_peer_mac, 0, sizeof(cfg.default_peer_mac));
 
-  SigEndpoint *ep = SigEndpoint::start(cfg);
+  SRPEndpoint *ep = new SRPEndpoint(cfg);
   if (!ep)
     return 1;
 
   // Launch a responder thread to echo data back
-  unsigned worker_lcore = rte_get_next_lcore(rte_lcore_id() + 1, 1, 0);
-  if (worker_lcore == RTE_MAX_LCORE) {
-    rte_exit(EXIT_FAILURE, "Not enough cores\n");
-  }
+  unsigned event_lcore = rte_get_next_lcore(rte_lcore_id(), 1, 0);
+  unsigned worker_lcore = rte_get_next_lcore(event_lcore, 1, 0);
+
   rte_eal_remote_launch((lcore_function_t *)responder_thread_main, ep,
                         worker_lcore);
   for (;;) {

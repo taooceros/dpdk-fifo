@@ -7,32 +7,39 @@
 #include <rte_ring.h>
 #include <thread>
 
-#include "signaling.hpp"
-#include "sigproc.hpp"
+#include "srp.hpp"
 
-using namespace sigproc;
+using namespace srp;
 
 static int producer_thread_main(void *arg) {
   rte_ring *out = reinterpret_cast<rte_ring *>(arg);
   uint32_t i = 0;
   printf("Producer thread running on lcore %u\n", rte_lcore_id());
   for (;;) {
-    SigSend *rec =
-        (SigSend *)rte_zmalloc(NULL, sizeof(SigSend), RTE_CACHE_LINE_SIZE);
+    Payload *rec =
+        (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
     if (!rec) {
       rte_pause();
       continue;
     }
-    rec->channel_id = 1;
-    rec->opcode = SIG_OPCODE_DATA;
     // Embed send timestamp (TSC cycles) for latency measurement
-    rec->payload_len = sizeof(uint64_t);
+    rec->size = sizeof(uint64_t);
     uint64_t tsc = rte_get_tsc_cycles();
-    rte_memcpy(rec->payload, &tsc, sizeof(tsc));
+    rte_memcpy(rec->data, &tsc, sizeof(tsc));
     while (rte_ring_sp_enqueue(out, rec) == -ENOBUFS) {
     }
+    sleep(10);
     ++i;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return 0;
+}
+
+static int event_thread_main(void *arg) {
+  SRPEndpoint *ep = reinterpret_cast<SRPEndpoint *>(arg);
+  printf("Event thread running on lcore %u\n", rte_lcore_id());
+  for (;;) {
+    ep->progress();
   }
   return 0;
 }
@@ -49,13 +56,19 @@ int main(int argc, char **argv) {
   cfg.default_peer_mac = BCAST;
 
   printf("Starting client\n");
-  SigEndpoint *ep = SigEndpoint::start(cfg);
-  printf("SigEndpoint started\n");
+  SRPEndpoint *ep = new SRPEndpoint(cfg);
+  printf("SRPEndpoint started\n");
   if (!ep)
     return 1;
 
+  unsigned event_lcore = rte_get_next_lcore(rte_lcore_id(), 1, 0);
+  if (event_lcore == RTE_MAX_LCORE) {
+    rte_exit(EXIT_FAILURE, "Not enough cores\n");
+  }
+  rte_eal_remote_launch((lcore_function_t *)event_thread_main, ep, event_lcore);
+
   // Launch producer on a separate lcore
-  unsigned producer_lcore = rte_get_next_lcore(rte_lcore_id() + 1, 1, 0);
+  unsigned producer_lcore = rte_get_next_lcore(event_lcore, 1, 0);
   if (producer_lcore == RTE_MAX_LCORE) {
     rte_exit(EXIT_FAILURE, "Not enough cores\n");
   }
@@ -67,12 +80,12 @@ int main(int argc, char **argv) {
   long double rtt_sum_us = 0.0L;
   const uint64_t report_interval = 1;
   for (;;) {
-    SigRecv *msg = nullptr;
+    Payload *msg = nullptr;
     if (rte_ring_sc_dequeue(ep->inbound_ring(), (void **)&msg) == 0) {
       // Compute RTT latency using embedded TSC timestamp
-      if (msg->payload_len >= sizeof(uint64_t)) {
+      if (msg->size >= sizeof(uint64_t)) {
         uint64_t send_tsc = 0;
-        rte_memcpy(&send_tsc, msg->payload, sizeof(send_tsc));
+        rte_memcpy(&send_tsc, msg->data, sizeof(send_tsc));
         uint64_t now = rte_get_tsc_cycles();
         uint64_t diff = now - send_tsc;
         double us = (double)diff * 1e6 / (double)rte_get_tsc_hz();
@@ -80,7 +93,8 @@ int main(int argc, char **argv) {
         rtt_count++;
         if (rtt_count % report_interval == 0) {
           double avg_us = (double)(rtt_sum_us / (long double)report_interval);
-          printf("Average RTT latency: %.2f us over %" PRIu64 " msgs\n", avg_us, report_interval);
+          printf("Average RTT latency: %.2f us over %" PRIu64 " msgs\n", avg_us,
+                 report_interval);
           rtt_sum_us = 0.0L;
         }
       }
@@ -88,5 +102,6 @@ int main(int argc, char **argv) {
     } else {
     }
   }
+
   return 0;
 }

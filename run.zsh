@@ -1,10 +1,13 @@
 #!/usr/bin/env zsh
 set -e
+xmake
 
 MODE="${1:-local}"  # local | remote
 
-client_path="build/linux/x86_64/release/client"
-server_path="build/linux/x86_64/release/server"
+RELEASE="${2:-debug}"
+
+client_path="build/linux/x86_64/${RELEASE}/client"
+server_path="build/linux/x86_64/${RELEASE}/server"
 
 
 remote_host="${REMOTE_HOST:-venus}"
