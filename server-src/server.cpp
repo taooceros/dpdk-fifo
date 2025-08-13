@@ -1,10 +1,10 @@
 // Shared full-duplex endpoint server
 #include <cstdio>
 #include <inttypes.h>
+#include <rte_cycles.h>
 #include <rte_eal.h>
 #include <rte_ether.h>
 #include <rte_ring.h>
-#include <rte_cycles.h>
 
 #include "signaling.hpp"
 #include "sigproc.hpp"

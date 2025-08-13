@@ -99,6 +99,8 @@ private:
   bool init_dpdk();
   int run_loop();
   void tx(EngineState &st);
+  void rx_ack(EngineState &st, SigRecv &rcv);
+  void rx_sig(EngineState &st, SigRecv &rcv);
   void rx(EngineState &st);
 
 private:

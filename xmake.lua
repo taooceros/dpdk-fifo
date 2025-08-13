@@ -2,6 +2,7 @@ add_rules("mode.debug", "mode.release")
 
 add_includedirs("include")
 add_requires("libdpdk", {system = true})
+set_languages("c++23")
 
 
 target("client")
