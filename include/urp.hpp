@@ -145,7 +145,8 @@ public:
     mbuf_pool_ = rte_pktmbuf_pool_create("URP_MBUF_POOL", 1024, 128, 0, 2048,
                                          rte_socket_id());
     if (!mbuf_pool_)
-      panic("%s", "Failed to create URP mbuf pool");
+      panic("%s %s", "Failed to create URP mbuf pool",
+            rte_strerror(rte_errno));
 
     cfg_ = cfg;
     port_init(cfg.port_id, mbuf_pool_);
