@@ -7,9 +7,9 @@
 #include <rte_ring.h>
 #include <thread>
 
-#include "srp.hpp"
+#include "urp.hpp"
 
-using namespace srp;
+using namespace urp;
 
 static int producer_thread_main(void *arg) {
   rte_ring *out = reinterpret_cast<rte_ring *>(arg);
@@ -27,16 +27,16 @@ static int producer_thread_main(void *arg) {
     uint64_t tsc = rte_get_tsc_cycles();
     rte_memcpy(rec->data, &tsc, sizeof(tsc));
     while (rte_ring_sp_enqueue(out, rec) == -ENOBUFS) {
+      rte_pause();
     }
-    sleep(10);
     ++i;
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   return 0;
 }
 
 static int event_thread_main(void *arg) {
-  SRPEndpoint *ep = reinterpret_cast<SRPEndpoint *>(arg);
+  URPEndpoint *ep = reinterpret_cast<URPEndpoint *>(arg);
   printf("Event thread running on lcore %u\n", rte_lcore_id());
   for (;;) {
     ep->progress();
@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
   cfg.default_peer_mac = BCAST;
 
   printf("Starting client\n");
-  SRPEndpoint *ep = new SRPEndpoint(cfg);
+  auto *ep = new urp::URPEndpoint(cfg);
   printf("SRPEndpoint started\n");
   if (!ep)
     return 1;
@@ -95,7 +95,11 @@ int main(int argc, char **argv) {
           double avg_us = (double)(rtt_sum_us / (long double)report_interval);
           printf("Average RTT latency: %.2f us over %" PRIu64 " msgs\n", avg_us,
                  report_interval);
+          // report throughput in Mbps
+          double throughput = (double)(report_interval * 1e6 * 8) / rtt_sum_us;
+          printf("Throughput: %.2f Mbps\n", throughput);
           rtt_sum_us = 0.0L;
+
         }
       }
       rte_free(msg);

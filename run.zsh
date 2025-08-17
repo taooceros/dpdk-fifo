@@ -1,10 +1,12 @@
 #!/usr/bin/env zsh
 set -e
-xmake
 
 MODE="${1:-local}"  # local | remote
 
 RELEASE="${2:-debug}"
+
+xmake f -m $RELEASE
+xmake
 
 client_path="build/linux/x86_64/${RELEASE}/client"
 server_path="build/linux/x86_64/${RELEASE}/server"

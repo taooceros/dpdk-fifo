@@ -6,13 +6,13 @@
 #include <rte_ether.h>
 #include <rte_ring.h>
 
-#include "srp.hpp"
+#include "urp.hpp"
 
-using namespace srp;
+using namespace urp;
 
 static int responder_thread_main(void *arg) {
   // Optional: echo payloads back to sender as a demonstration of duplex
-  SRPEndpoint *ep = reinterpret_cast<SRPEndpoint *>(arg);
+  URPEndpoint *ep = reinterpret_cast<URPEndpoint *>(arg);
   rte_ring *in = ep->inbound_ring();
   rte_ring *out = ep->outbound_ring();
 
@@ -38,7 +38,7 @@ static int responder_thread_main(void *arg) {
           (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
       resp->size = msg->size;
       rte_memcpy(resp->data, msg->data, resp->size);
-      while (rte_ring_sp_enqueue(out, (void **)&resp) == -ENOBUFS) {
+      while (rte_ring_sp_enqueue(out, resp) == -ENOBUFS) {
         rte_pause();
       }
 
@@ -52,8 +52,7 @@ static int responder_thread_main(void *arg) {
 }
 
 static int event_thread_main(void *arg) {
-  using namespace srp;
-  SRPEndpoint *ep = reinterpret_cast<SRPEndpoint *>(arg);
+  URPEndpoint *ep = reinterpret_cast<URPEndpoint *>(arg);
   printf("Event thread running on lcore %u\n", rte_lcore_id());
   for (;;) {
     ep->progress();
@@ -71,12 +70,15 @@ int main(int argc, char **argv) {
   // No default peer; will learn from inbound frames and reply
   memset(&cfg.default_peer_mac, 0, sizeof(cfg.default_peer_mac));
 
-  SRPEndpoint *ep = new SRPEndpoint(cfg);
+  URPEndpoint *ep = new URPEndpoint(cfg);
   if (!ep)
     return 1;
 
   // Launch a responder thread to echo data back
   unsigned event_lcore = rte_get_next_lcore(rte_lcore_id(), 1, 0);
+
+  rte_eal_remote_launch((lcore_function_t *)event_thread_main, ep, event_lcore);
+
   unsigned worker_lcore = rte_get_next_lcore(event_lcore, 1, 0);
 
   rte_eal_remote_launch((lcore_function_t *)responder_thread_main, ep,

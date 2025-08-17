@@ -22,7 +22,10 @@ static constexpr size_t BURST_SIZE = 64;
 static constexpr size_t RX_DESC_DEFAULT = 128;
 static constexpr size_t TX_DESC_DEFAULT = 128;
 
-static constexpr uint16_t OPCODE_ACK = 0x10;
+static constexpr uint16_t OPCODE_ACK = 0x11;
+static constexpr uint16_t OPCODE_DATA = 0x10;
+
+static constexpr uint16_t ETH_TYPE = 0x88B5;
 
 static constexpr size_t MAX_PAYLOAD = 1024;
 
@@ -32,7 +35,7 @@ struct Payload {
 };
 
 // Simple Reliable Protocol Header
-struct scp_hdr {
+struct srp_hdr {
   uint32_t seq;
   uint16_t version;
   uint16_t opcode;
@@ -141,8 +144,9 @@ private:
     SRPEndpoint *ep;
     struct rte_mbuf *rx_bufs[BURST_SIZE];
     Ring<rte_mbuf *, BURST_SIZE> outstanding_tx;
-    uint32_t next_seq{0};
-    uint32_t expect_seq{0};
+    uint32_t tx_seq{0};
+    uint32_t rx_seq{0};
+    bool need_ack{false};
     uint64_t last_tx_cycles{0};
     uint64_t timeout_cycles{0};
     rte_ether_addr learned_peer; // last peer from RX
@@ -155,7 +159,7 @@ private:
                                     const rte_ether_addr *src_mac,
                                     const rte_ether_addr *dst_mac,
                                     Payload *payload, uint32_t seq) {
-    size_t frame_len = sizeof(struct rte_ether_hdr) + sizeof(scp_hdr);
+    size_t frame_len = sizeof(struct rte_ether_hdr) + sizeof(srp_hdr);
     struct rte_mbuf *m = rte_pktmbuf_alloc(pool);
     if (!m)
       panic("Failed to allocate mbuf");
@@ -168,39 +172,38 @@ private:
     struct rte_ether_hdr *eth = (struct rte_ether_hdr *)data;
     rte_ether_addr_copy(dst_mac, &eth->dst_addr);
     rte_ether_addr_copy(src_mac, &eth->src_addr);
-    eth->ether_type = rte_cpu_to_be_16(0x88B5);
-    scp_hdr *sh = (scp_hdr *)(eth + 1);
+    eth->ether_type = rte_cpu_to_be_16(ETH_TYPE);
+    srp_hdr *sh = (srp_hdr *)(eth + 1);
     sh->version = rte_cpu_to_be_16(1);
-    sh->opcode = rte_cpu_to_be_16(0x10);
+    sh->opcode = rte_cpu_to_be_16(OPCODE_DATA);
+    sh->seq = rte_cpu_to_be_32(seq);
     sh->payload_len = rte_cpu_to_be_16(payload->size);
     if (payload->size) {
-      uint8_t *p = (uint8_t *)(sh + 1);
-      rte_memcpy(p, payload->data, payload->size);
+      rte_memcpy(sh->payload, payload->data, payload->size);
     }
     return m;
   }
 
-  scp_hdr parse_frame(struct rte_mbuf *m) {
-    scp_hdr sh;
+  srp_hdr parse_frame(struct rte_mbuf *m) {
+    srp_hdr sh;
 
-    if (rte_pktmbuf_pkt_len(m) < sizeof(struct rte_ether_hdr) + sizeof(scp_hdr))
+    if (rte_pktmbuf_pkt_len(m) < sizeof(struct rte_ether_hdr) + sizeof(srp_hdr))
       return sh;
     struct rte_ether_hdr *eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
-    if (eth->ether_type != rte_cpu_to_be_16(0x88B5))
+    if (eth->ether_type != rte_cpu_to_be_16(ETH_TYPE))
       return sh;
-    sh = *(scp_hdr *)(eth + 1);
+    sh = *(srp_hdr *)(eth + 1);
     uint16_t version = rte_be_to_cpu_16(sh.version);
     if (version != 1)
-      return sh;
+      panic("unsupported version %u", version);
     sh.opcode = rte_be_to_cpu_16(sh.opcode);
     sh.payload_len = rte_be_to_cpu_16(sh.payload_len);
-    size_t need =
-        sizeof(struct rte_ether_hdr) + sizeof(scp_hdr) + sh.payload_len;
+    sh.seq = rte_be_to_cpu_32(sh.seq);
+    size_t need = sizeof(struct rte_ether_hdr) + sizeof(srp_hdr);
     if (rte_pktmbuf_pkt_len(m) < need || sh.payload_len > 1024)
-      return sh;
+      panic("invalid frame");
     if (sh.payload_len) {
-      uint8_t *p = (uint8_t *)(&sh + 1);
-      rte_memcpy(sh.payload, p, sh.payload_len);
+      // rte_memcpy(sh.payload, sh.payload, sh.payload_len);
     }
     return sh;
   }
@@ -213,12 +216,8 @@ private:
     uint64_t now = rte_get_timer_cycles();
     if (now - st.last_tx_cycles >= st.timeout_cycles) {
 
-      printf("tx_retransmit: outstanding_tx.size() %zu\n",
-             st.outstanding_tx.size());
       auto span = st.outstanding_tx.longest_span();
-      printf("tx_retransmit: span.size() %zu\n", span.size());
       uint16_t s = rte_eth_tx_burst(cfg_.port_id, 0, span.data(), span.size());
-      printf("tx_retransmit: s %u\n", s);
       st.last_tx_cycles = now;
     }
   }
@@ -232,10 +231,10 @@ private:
     Payload *payload;
     auto tx_start = st.outstanding_tx.tail();
     if (rte_ring_sc_dequeue(outbound_ring_, (void **)&payload) == 0) {
-      uint32_t seq = st.next_seq++;
+      uint32_t seq = st.tx_seq++;
       const rte_ether_addr *dst =
           st.have_learned_peer ? &st.learned_peer : &cfg_.default_peer_mac;
-      printf("build_data_frame: dst %p mpool %p\n", dst, mbuf_pool_);
+      // printf("build_data_frame: dst %p mpool %p\n", dst, mbuf_pool_);
       struct rte_mbuf *m =
           build_data_frame(mbuf_pool_, &src_mac_, dst, payload, seq);
       if (m) {
@@ -259,25 +258,10 @@ private:
     }
   }
 
-  void rx_ack(EngineState &st, scp_hdr &rcv) {
-    // receive ack, update the head of outstanding_tx
-
-    auto acked = rcv.seq - st.expect_seq;
-    for (int i = 0; i < acked; i++) {
-      struct rte_mbuf *m;
-      if (st.outstanding_tx.pop(m)) {
-        rte_pktmbuf_free(m);
-        break;
-      } else {
-        panic("outstanding_tx is empty");
-      }
-    }
-  }
-
   struct rte_mbuf *build_ack_frame(struct rte_mempool *pool,
                                    const rte_ether_addr *src,
                                    const rte_ether_addr *dst, uint32_t seq) {
-    size_t frame_len = sizeof(struct rte_ether_hdr) + sizeof(scp_hdr);
+    size_t frame_len = sizeof(struct rte_ether_hdr) + sizeof(srp_hdr);
     struct rte_mbuf *m = rte_pktmbuf_alloc(pool);
     if (!m)
       return nullptr;
@@ -291,7 +275,7 @@ private:
     rte_ether_addr_copy(dst, &eth->dst_addr);
     rte_ether_addr_copy(src, &eth->src_addr);
     eth->ether_type = rte_cpu_to_be_16(0x88B5);
-    scp_hdr *sh = (scp_hdr *)(eth + 1);
+    srp_hdr *sh = (srp_hdr *)(eth + 1);
     sh->version = rte_cpu_to_be_16(1);
     sh->seq = rte_cpu_to_be_32(seq);
     sh->opcode = rte_cpu_to_be_16(OPCODE_ACK);
@@ -299,15 +283,30 @@ private:
     return m;
   }
 
+  void rx_ack(EngineState &st, srp_hdr &rcv) {
+    // receive ack, update the head of outstanding_tx
+
+    auto acked = rcv.seq - st.rx_seq;
+    for (int i = 0; i < acked; i++) {
+      struct rte_mbuf *m;
+      if (st.outstanding_tx.pop(m)) {
+        rte_pktmbuf_free(m);
+        break;
+      } else {
+        panic("outstanding_tx is empty");
+      }
+    }
+  }
+
   void rx(EngineState &st) {
     // RX first: handle ACKs and inbound DATA; send ACKs for DATA
     uint16_t nb_rx = rte_eth_rx_burst(cfg_.port_id, 0, st.rx_bufs, BURST_SIZE);
     for (uint16_t i = 0; i < nb_rx; ++i) {
       struct rte_mbuf *m = st.rx_bufs[i];
-      scp_hdr rcv = parse_frame(m);
+      srp_hdr rcv = parse_frame(m);
 
-      printf("RX: seq=%u, opcode=%u, payload_len=%u\n", rcv.seq, rcv.opcode,
-             rcv.payload_len);
+      // printf("RX: seq=%u, opcode=%u, payload_len=%u\n", rcv.seq, rcv.opcode,
+      //        rcv.payload_len);
       // learn peer MAC from frame src
       struct rte_ether_hdr *eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
       rte_ether_addr_copy(&eth->src_addr, &st.learned_peer);
@@ -317,9 +316,9 @@ private:
         rx_ack(st, rcv);
       } else {
         // Enqueue inbound DATA only if in-order
-        uint32_t expect = st.expect_seq;
-        if (rcv.seq == expect) {
-          st.expect_seq = expect + 1;
+        uint32_t rx_seq = st.rx_seq;
+        if (rcv.seq == rx_seq) {
+          st.rx_seq = rx_seq + 1;
           // Copy and deliver
 
           auto payload = (Payload *)rte_zmalloc(NULL, sizeof(Payload),
@@ -327,25 +326,28 @@ private:
           if (payload) {
             payload->size = rcv.payload_len;
             rte_memcpy(payload->data, rcv.payload, payload->size);
-            while (rte_ring_sp_enqueue(inbound_ring_, (void **)&payload) ==
-                   -ENOBUFS) {
+            while (rte_ring_sp_enqueue(inbound_ring_, payload) == -ENOBUFS) {
             }
           }
         }
+
+        st.need_ack = true;
       }
 
       rte_pktmbuf_free(m);
     }
-
-    // send the latest seq number as ACK
-    const rte_ether_addr *dst =
-        st.have_learned_peer ? &st.learned_peer : &peer_mac_default_;
-    struct rte_mbuf *ack =
-        build_ack_frame(mbuf_pool_, &src_mac_, dst, st.expect_seq - 1);
-    if (ack) {
-      uint16_t s = rte_eth_tx_burst(cfg_.port_id, 0, &ack, 1);
-      if (s == 0)
-        rte_pktmbuf_free(ack);
+    if (st.need_ack) {
+      // send the latest seq number as ACK
+      const rte_ether_addr *dst =
+          st.have_learned_peer ? &st.learned_peer : &peer_mac_default_;
+      struct rte_mbuf *ack =
+          build_ack_frame(mbuf_pool_, &src_mac_, dst, st.rx_seq);
+      if (ack) {
+        uint16_t s = rte_eth_tx_burst(cfg_.port_id, 0, &ack, 1);
+        if (s == 0)
+          rte_pktmbuf_free(ack);
+      }
+      st.need_ack = false;
     }
   }
 
