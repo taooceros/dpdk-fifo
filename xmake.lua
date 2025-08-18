@@ -6,8 +6,7 @@ rule("dpdk_linker_flags")
         if output then
             target:add("ldflags", output:trim())
         end
-    end)
-    on_build(function (target)
+        
         local includedir = os.iorunv("pkg-config", {"--cflags-only-I", "libdpdk"})
         if includedir then
             target:add("cflags", includedir:trim())
