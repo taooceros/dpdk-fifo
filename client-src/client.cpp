@@ -14,7 +14,10 @@ using namespace urp;
 static int producer_thread_main(void *arg) {
   rte_ring *out = reinterpret_cast<rte_ring *>(arg);
   uint32_t i = 0;
+  uint32_t last_time = 0;
   printf("Producer thread running on lcore %u\n", rte_lcore_id());
+  uint32_t enqueue_count = 0;
+  uint32_t ring_full_count = 0;
   for (;;) {
     Payload *rec =
         (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
@@ -27,10 +30,26 @@ static int producer_thread_main(void *arg) {
     uint64_t tsc = rte_get_tsc_cycles();
     rte_memcpy(rec->data, &tsc, sizeof(tsc));
     while (rte_ring_sp_enqueue(out, rec) == -ENOBUFS) {
+      ring_full_count++;
+      enqueue_count++;
       rte_pause();
     }
+    enqueue_count++;
     ++i;
-    // std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    if (i % 100000 == 0) {
+      uint32_t now = rte_get_tsc_cycles();
+      double seconds = (now - last_time) / (double)rte_get_tsc_hz();
+      double throughput = 100000 / seconds;
+      printf("throughput: %f\n", throughput);
+      last_time = now;
+
+      printf("enqueue_count: %d, ring_full_count: %d (ratio: %f)\n",
+             enqueue_count, ring_full_count,
+             (double)ring_full_count / enqueue_count);
+      enqueue_count = 0;
+      ring_full_count = 0;
+    }
+    // std::this_thread::sledep_for(std::chrono::milliseconds(5));
   }
   return 0;
 }
@@ -82,6 +101,7 @@ int main(int argc, char **argv) {
   for (;;) {
     Payload *msg = nullptr;
     if (rte_ring_sc_dequeue(ep->inbound_ring(), (void **)&msg) == 0) {
+      printf("Received message\n");
       // Compute RTT latency using embedded TSC timestamp
       if (msg->size >= sizeof(uint64_t)) {
         uint64_t send_tsc = 0;
@@ -99,7 +119,6 @@ int main(int argc, char **argv) {
           double throughput = (double)(report_interval * 1e6 * 8) / rtt_sum_us;
           printf("Throughput: %.2f Mbps\n", throughput);
           rtt_sum_us = 0.0L;
-
         }
       }
       rte_free(msg);

@@ -16,7 +16,12 @@ rule("dpdk_linker_flags")
 
 rule_end()
 
-add_rules("mode.debug", "mode.release")
+add_rules("mode.debug", "mode.release", "mode.releasedbg")
+
+set_policy("build.sanitizer.address", true)
+
+add_cflags("-g")
+add_cxxflags("-g")
 
 
 add_includedirs("include")
@@ -31,10 +36,10 @@ set_languages("c++23")
 target("client")
     set_kind("binary")
     add_files("client-src/*.cpp", "common/*.cpp")
-    add_rules("dpdk_linker_flags")
+    add_packages("pkgconfig::libdpdk")
 
 
 target("server")
     set_kind("binary")
     add_files("server-src/*.cpp", "common/*.cpp")
-    add_rules("dpdk_linker_flags")
+    add_packages("pkgconfig::libdpdk")

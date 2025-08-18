@@ -14,79 +14,13 @@
 
 #include "common.hpp"
 
-// A simple UDP-like transport with no reliability guarantee.
-// This class provides send and receive methods that simply transmit and receive
-// packets without any retransmission, ordering, or acknowledgment.
-
-class UdpTransport {
-public:
-  UdpTransport(uint16_t port_id, struct rte_mempool *mbuf_pool,
-               const rte_ether_addr &src_mac, const rte_ether_addr &dst_mac)
-      : port_id_(port_id), mbuf_pool_(mbuf_pool), src_mac_(src_mac),
-        dst_mac_(dst_mac) {}
-
-  // Send a payload as a single Ethernet frame.
-  // Returns true on success, false on failure.
-  bool send(const void *payload, size_t payload_len) {
-    size_t frame_len = sizeof(struct rte_ether_hdr) + payload_len;
-    struct rte_mbuf *m = rte_pktmbuf_alloc(mbuf_pool_);
-    if (!m)
-      return false;
-    uint8_t *data = rte_pktmbuf_mtod(m, uint8_t *);
-    rte_pktmbuf_reset_headroom(m);
-    if (rte_pktmbuf_append(m, frame_len) == NULL) {
-      rte_pktmbuf_free(m);
-      return false;
-    }
-    struct rte_ether_hdr *eth = (struct rte_ether_hdr *)data;
-    rte_ether_addr_copy(&dst_mac_, &eth->dst_addr);
-    rte_ether_addr_copy(&src_mac_, &eth->src_addr);
-    eth->ether_type = rte_cpu_to_be_16(0x0800); // IPv4 EtherType, for example
-
-    // Copy payload after Ethernet header
-    rte_memcpy(data + sizeof(struct rte_ether_hdr), payload, payload_len);
-
-    uint16_t sent = rte_eth_tx_burst(port_id_, 0, &m, 1);
-    if (sent == 0) {
-      rte_pktmbuf_free(m);
-      return false;
-    }
-    return true;
-  }
-
-  // Receive up to burst_size packets, calling the handler for each payload.
-  // The handler is called as: void handler(const void* data, size_t len)
-  template <typename Handler>
-  void receive(Handler handler, uint16_t burst_size = 32) {
-    struct rte_mbuf *bufs[32];
-    uint16_t nb_rx = rte_eth_rx_burst(port_id_, 0, bufs, burst_size);
-    for (uint16_t i = 0; i < nb_rx; ++i) {
-      struct rte_mbuf *m = bufs[i];
-      uint8_t *data = rte_pktmbuf_mtod(m, uint8_t *);
-      size_t data_len = rte_pktmbuf_pkt_len(m);
-
-      if (data_len > sizeof(struct rte_ether_hdr)) {
-        handler(data + sizeof(struct rte_ether_hdr),
-                data_len - sizeof(struct rte_ether_hdr));
-      }
-      rte_pktmbuf_free(m);
-    }
-  }
-
-private:
-  uint16_t port_id_;
-  struct rte_mempool *mbuf_pool_;
-  rte_ether_addr src_mac_;
-  rte_ether_addr dst_mac_;
-};
-
 // Unreliable Reliable Protocol (URP) - Similar interface to SRP but without
 // ACKs
 namespace urp {
 
-static constexpr size_t BURST_SIZE = 64;
-static constexpr size_t RX_DESC_DEFAULT = 128;
-static constexpr size_t TX_DESC_DEFAULT = 128;
+static constexpr size_t BURST_SIZE = 128;
+static constexpr size_t RX_DESC_DEFAULT = 256;
+static constexpr size_t TX_DESC_DEFAULT = 256;
 
 static constexpr uint16_t OPCODE_DATA =
     0x20; // Different from SRP to avoid conflicts
@@ -145,8 +79,7 @@ public:
     mbuf_pool_ = rte_pktmbuf_pool_create("URP_MBUF_POOL", 1024, 128, 0, 2048,
                                          rte_socket_id());
     if (!mbuf_pool_)
-      panic("%s %s", "Failed to create URP mbuf pool",
-            rte_strerror(rte_errno));
+      panic("%s %s", "Failed to create URP mbuf pool", rte_strerror(rte_errno));
 
     cfg_ = cfg;
     port_init(cfg.port_id, mbuf_pool_);
@@ -253,20 +186,27 @@ private:
     return hdr;
   }
 
+  Payload *tx_payloads[BURST_SIZE];
+  struct rte_mbuf *tx_bufs[BURST_SIZE];
   void tx() {
     // Send packets from outbound ring - fire and forget, no ACK handling
-    Payload *payload = nullptr;
-    while (rte_ring_sc_dequeue(outbound_ring_, (void **)&payload) == 0) {
+    while (rte_ring_sc_dequeue_bulk(outbound_ring_, (void **)tx_payloads,
+                                    BURST_SIZE, nullptr) != 0) {
       const rte_ether_addr *dst =
           have_learned_peer_ ? &learned_peer_ : &peer_mac_default_;
-      struct rte_mbuf *m = build_data_frame(dst, payload, tx_seq_++);
-      if (m) {
-        uint16_t sent = rte_eth_tx_burst(cfg_.port_id, 0, &m, 1);
-        if (sent == 0) {
-          rte_pktmbuf_free(m);
+      for (uint32_t i = 0; i < BURST_SIZE; ++i) {
+        struct rte_mbuf *m = build_data_frame(dst, tx_payloads[i], tx_seq_++);
+        if (m) {
+          tx_bufs[i] = m;
         }
       }
-      rte_free(payload);
+      uint16_t sent = rte_eth_tx_burst(cfg_.port_id, 0, tx_bufs, BURST_SIZE);
+      for (uint32_t i = sent; i < BURST_SIZE; ++i) {
+        rte_pktmbuf_free(tx_bufs[i]);
+      }
+      for (uint32_t i = 0; i < BURST_SIZE; ++i) {
+        rte_free(tx_payloads[i]);
+      }
     }
   }
 

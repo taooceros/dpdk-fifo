@@ -1,6 +1,8 @@
 #!/usr/bin/env zsh
 set -e
 
+sudo tmux kill-session -t sigproc || true
+
 MODE="${1:-local}"  # local | remote
 
 RELEASE="${2:-debug}"
@@ -18,9 +20,10 @@ remote_dir="$PWD"
 if [[ "$MODE" == "local" ]]; then
   client_args="-l 0-3 --vdev=net_memif0,role=slave,socket=/tmp/memif.sock --file-prefix=client"
   server_args="-l 4-7 --vdev=net_memif0,role=master,socket=/tmp/memif.sock --file-prefix=server"
-  tmux new-session -d -s sigproc \; \
+  sudo tmux new-session -d -s sigproc \; \
   split-window -h \; \
-  send-keys -t 0 "$client_path $client_args" C-m \; \
+  setw -g mouse on \; \
+  send-keys -t 0 "/home/hongtao/.cargo/bin/samply record -- $client_path $client_args" C-m \; \
   send-keys -t 1 "$server_path $server_args" C-m \; \
   attach
 else
