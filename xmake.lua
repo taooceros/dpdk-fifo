@@ -1,5 +1,5 @@
 
-rule("dpdk_linker_flags")
+rule("dpdk")
     before_build(function (target)
         -- Call external tool to generate flags
         local output = os.iorunv("pkg-config", {"--static", "--libs", "libdpdk"})
@@ -31,6 +31,12 @@ add_requires("pkgconfig::libdpdk", {system = true, configs = {
 }})
 
 set_languages("c++23")
+
+if is_arch("arm64") then
+    add_rules("dpdk")
+else
+    add_packages("pkgconfig::libdpdk")
+end
 
 
 target("client")
