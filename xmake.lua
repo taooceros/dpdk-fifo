@@ -18,7 +18,6 @@ rule_end()
 
 add_rules("mode.debug", "mode.release", "mode.releasedbg")
 
-set_policy("build.sanitizer.address", true)
 
 add_cflags("-g")
 add_cxxflags("-g")
@@ -35,6 +34,7 @@ set_languages("c++23")
 if is_arch("arm64") then
     add_rules("dpdk")
 else
+    set_policy("build.sanitizer.address", true)
     add_packages("pkgconfig::libdpdk")
 end
 
