@@ -1,17 +1,19 @@
 
 rule("dpdk_linker_flags")
-    on_load(function (target)
+    before_build(function (target)
         -- Call external tool to generate flags
         local output = os.iorunv("pkg-config", {"--static", "--libs", "libdpdk"})
         if output then
-            target:add("ldflags", output:trim())
+            target:set("ldflags",  output:trim())
         end
         
-        local includedir = os.iorunv("pkg-config", {"--cflags-only-I", "libdpdk"})
-        if includedir then
-            target:add("cflags", includedir:trim())
+        local cflags = os.iorunv("pkg-config", {"--cflags", "libdpdk"})
+        if cflags then
+            target:add("cxxflags", cflags:trim(), {force = true}) 
+            target:add("cflags", cflags:trim(), {force = true}) 
         end
     end)
+
 rule_end()
 
 add_rules("mode.debug", "mode.release")
