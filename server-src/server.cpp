@@ -32,18 +32,18 @@ static int responder_thread_main(void *arg) {
         uint64_t now = rte_get_tsc_cycles();
         double seconds = (now - last_time) / (double)rte_get_tsc_hz();
         double throughput = (total_count - last_count) / seconds;
-        printf("Throughput: %.2f msgs/sec, avg: %lu\n", throughput, avg_count);
         last_time = now;
         last_count = total_count;
       }
 
-      avg_count = (count + avg_count * num) / (num + 1);
-      num++;
-
-      // while (rte_ring_sp_enqueue_bulk(out, (void **)msg, 1024, nullptr) ==
-      //        -ENOBUFS) {
-      //   rte_pause();
-      // }
+      uint16_t num_enqueued = 0;
+      while ((num_enqueued += rte_ring_sp_enqueue_burst(
+                  out, (void **)msg + num_enqueued, count - num_enqueued,
+                  nullptr)) < count) {
+        if (num_enqueued == 0) {
+          rte_pause();
+        }
+      }
     } else {
       rte_pause();
     }

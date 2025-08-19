@@ -249,13 +249,9 @@ private:
                   inbound_ring_, (void **)rx_payloads_buf + num_enqueued,
                   nb_rx - num_enqueued, nullptr)) < nb_rx) {
         num_trials++;
-        rte_pause();
-      }
-      num_trials++;
-      id++;
-      if (id % 100000 == 0) {
-        printf("id: %lu, num_trials: %u [%.2f]\n", id, num_trials,
-               (double)id / num_trials);
+        if (num_enqueued == 0) {
+          rte_pause();
+        }
       }
     }
   }
