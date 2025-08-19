@@ -52,7 +52,7 @@ static int producer_thread_main(void *arg) {
       enqueue_count = 0;
       ring_full_count = 0;
     }
-    // std::this_thread::sledep_for(std::chrono::milliseconds(5));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   return 0;
 }

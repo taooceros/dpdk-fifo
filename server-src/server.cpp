@@ -5,6 +5,7 @@
 #include <rte_eal.h>
 #include <rte_ether.h>
 #include <rte_ring.h>
+#include <thread>
 
 #include "urp.hpp"
 
@@ -22,7 +23,7 @@ static int responder_thread_main(void *arg) {
   uint64_t count = 0;
   double avg_count = 0;
   double num;
-  const uint64_t report_interval = 1000000; // report every 1M packets
+  const uint64_t report_interval = 100000; // report every 1M packets
   Payload *msg[1024];
   while (true) {
     if ((count = rte_ring_sc_dequeue_burst(in, (void **)&msg, 1024, nullptr)) >
@@ -31,19 +32,26 @@ static int responder_thread_main(void *arg) {
       if (total_count - last_count > report_interval) {
         uint64_t now = rte_get_tsc_cycles();
         double seconds = (now - last_time) / (double)rte_get_tsc_hz();
-        double throughput = (total_count - last_count) / seconds;
+        uint64_t delta = total_count - last_count;
+        double throughput = delta / seconds;
         last_time = now;
         last_count = total_count;
+        printf("total_count: %lu, last_count: %lu, delta: %lu, "
+               "throughput: %f\n in %f seconds",
+               total_count, last_count, delta, throughput, seconds);
       }
 
-      uint16_t num_enqueued = 0;
-      while ((num_enqueued += rte_ring_sp_enqueue_burst(
-                  out, (void **)msg + num_enqueued, count - num_enqueued,
-                  nullptr)) < count) {
-        if (num_enqueued == 0) {
-          rte_pause();
-        }
-      }
+      // uint16_t num_enqueued = 0;
+      // uint32_t free_space;
+      // while ((num_enqueued +=
+      //         rte_ring_sp_enqueue_burst(out, (void **)msg, count - num_enqueued,
+      //                                   &free_space)) < count) {
+      //   {
+      //     rte_pause();
+      //     printf("num_enqueued: %u, count: %lu, free_space: %u\n", num_enqueued,
+      //            count, free_space);
+      //   }
+      // }
     } else {
       rte_pause();
     }
