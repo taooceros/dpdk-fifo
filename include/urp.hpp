@@ -174,8 +174,10 @@ private:
       return hdr;
 
     struct rte_ether_hdr *eth = (struct rte_ether_hdr *)data;
-    if (rte_be_to_cpu_16(eth->ether_type) != ETH_TYPE)
+    if (rte_be_to_cpu_16(eth->ether_type) != ETH_TYPE) {
+      panic("Invalid ETH_TYPE: %u", rte_be_to_cpu_16(eth->ether_type));
       return hdr;
+    }
 
     urp_hdr *uh = (urp_hdr *)(eth + 1);
     // hdr.seq = rte_be_to_cpu_32(uh->seq);
@@ -247,7 +249,7 @@ private:
     }
 
     auto num_enqueued = 0;
-    while ((num_enqueued += rte_ring_sp_enqueue_bulk(
+    while ((num_enqueued += rte_ring_sp_enqueue_burst(
                 inbound_ring_, (void **)rx_payloads_buf + num_enqueued,
                 nb_rx - num_enqueued, nullptr)) < nb_rx) {
       rte_pause();

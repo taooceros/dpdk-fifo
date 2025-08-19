@@ -20,7 +20,7 @@ static int responder_thread_main(void *arg) {
   uint64_t total_count = 0;
   uint64_t last_count = 0;
   uint64_t count = 0;
-  const uint64_t report_interval = 100000; // report every 1M packets
+  const uint64_t report_interval = 1000000; // report every 1M packets
   Payload *msg[1024];
   while (true) {
     if ((count = rte_ring_sc_dequeue_burst(in, (void **)&msg, 1024, nullptr)) >
