@@ -20,8 +20,8 @@ static int responder_thread_main(void *arg) {
   uint64_t total_count = 0;
   uint64_t last_count = 0;
   uint64_t count = 0;
-  uint64_t avg_count = 0;
-  uint64_t num;
+  double avg_count = 0;
+  double num;
   const uint64_t report_interval = 1000000; // report every 1M packets
   Payload *msg[1024];
   while (true) {
