@@ -13,7 +13,7 @@ CLIENT_PCI="${CLIENT_PCI:-2a:00.0}"   # Marvell SmartNIC PCI address
 MODE="${MODE:-client}"
 
 # Burst sizes to test (powers of 2)
-BURST_SIZES=(1 2 4 8 16 32 64 128 256)
+BURST_SIZES=(4 8 16 32 64 128)
 
 # Colors for output
 RED='\033[0;31m'
@@ -230,14 +230,12 @@ run_burst_test() {
 
 
     # Run client test
-    for size in "${BURST_SIZES[@]}"; do
-        if [[ "$MODE" == "client" ]]; then
-            run_client_test "$size"
-        elif [[ "$MODE" == "server" ]]; then
-            run_server_test "$size"
-        fi
-        sleep 2
-    done
+    if [[ "$MODE" == "client" ]]; then
+        run_client_test "$burst_size"
+    elif [[ "$MODE" == "server" ]]; then
+        run_server_test "$burst_size"
+    fi
+    sleep 2
     
     echo ""
     success "Completed test for burst size: $burst_size"

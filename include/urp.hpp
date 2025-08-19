@@ -105,13 +105,14 @@ public:
     if (!outbound_ring_)
       panic("Failed to create URP outbound ring");
 
-    for (uint32_t i = 0; i < DEFAULT_BURST_SIZE; ++i) {
-      rx_payloads_buf[i] =
+    tx_payloads_ptr_buf = std::vector<Payload *>(cfg.tx_burst_size);
+    tx_bufs_ptr_buf = std::vector<struct rte_mbuf *>(cfg.tx_burst_size);
+    rx_payloads_ptr_buf = std::vector<Payload *>(cfg.rx_burst_size);
+    for (uint32_t i = 0; i < cfg.rx_burst_size; ++i) {
+      rx_payloads_ptr_buf[i] =
           (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
     }
-
-    tx_payloads_ptr_buf = std::vector<Payload *>(DEFAULT_BURST_SIZE);
-    tx_bufs_ptr_buf = std::vector<struct rte_mbuf *>(DEFAULT_BURST_SIZE);
+    rx_bufs_ptr_buf = std::vector<struct rte_mbuf *>(cfg.rx_burst_size);
 
     // Initialize state
     tx_seq_ = 0;
@@ -134,13 +135,16 @@ public:
 
   std::vector<Payload *> tx_payloads_ptr_buf;
   std::vector<struct rte_mbuf *> tx_bufs_ptr_buf;
+  std::vector<Payload *> rx_payloads_ptr_buf;
+  std::vector<struct rte_mbuf *> rx_bufs_ptr_buf;
+
   void tx() {
     uint32_t nb_payloads = 0;
     // Send packets from outbound ring - fire and forget, no ACK handling
 
     if ((nb_payloads = rte_ring_sc_dequeue_burst(
              outbound_ring_, (void **)tx_payloads_ptr_buf.data(),
-             DEFAULT_BURST_SIZE, nullptr)) != 0) {
+             cfg_.tx_burst_size, nullptr)) != 0) {
       const rte_ether_addr *dst =
           have_learned_peer_ ? &learned_peer_ : &peer_mac_default_;
       for (uint32_t i = 0; i < nb_payloads; ++i) {
@@ -161,12 +165,11 @@ public:
 
   void rx() {
     // Receive packets and enqueue to inbound ring - no ACK needed
-    struct rte_mbuf *rx_bufs[DEFAULT_BURST_SIZE];
-    uint16_t nb_rx =
-        rte_eth_rx_burst(cfg_.port_id, 0, rx_bufs, DEFAULT_BURST_SIZE);
+    uint16_t nb_rx = rte_eth_rx_burst(cfg_.port_id, 0, rx_bufs_ptr_buf.data(),
+                                      cfg_.rx_burst_size);
 
     for (uint16_t i = 0; i < nb_rx; ++i) {
-      struct rte_mbuf *m = rx_bufs[i];
+      struct rte_mbuf *m = rx_bufs_ptr_buf[i];
       urp_hdr rcv = parse_frame(m);
       if (rcv.opcode == OPCODE_DATA) {
         // Learn peer MAC from frame src
@@ -189,8 +192,8 @@ public:
     if (nb_rx > 0) {
       uint32_t num_enqueued = 0;
       while ((num_enqueued += rte_ring_sp_enqueue_burst(
-                  inbound_ring_, (void **)rx_payloads_buf, nb_rx - num_enqueued,
-                  nullptr)) < nb_rx) {
+                  inbound_ring_, (void **)rx_payloads_ptr_buf.data(),
+                  nb_rx - num_enqueued, nullptr)) < nb_rx) {
         num_rx_trials_++;
         if (num_enqueued == 0) {
           rte_pause();
@@ -277,9 +280,6 @@ private:
 
   rte_ring *inbound_ring_{nullptr};
   rte_ring *outbound_ring_{nullptr};
-
-  uint32_t rx_payloads_buf_idx_{0};
-  Payload *rx_payloads_buf[DEFAULT_BURST_SIZE];
 
   EndpointConfig cfg_;
   struct rte_mempool *mbuf_pool_{nullptr};
