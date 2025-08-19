@@ -252,7 +252,7 @@ private:
     }
     num_trials++;
     id++;
-    if (id++ % 100000 == 0) {
+    if (id % 100000 == 0) {
       printf("id: %lu, num_trials: %u [%.2f]\n", id, num_trials,
              (double)id / num_trials);
     }
