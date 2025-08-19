@@ -238,22 +238,21 @@ private:
         if (payload) {
           // payload->size = rcv.payload_len;
           // rte_memcpy(payload->data, rcv.payload, payload->size);
-          int trial = 0;
-
-          if (trial > 10000) {
-            printf("Trial: %u\n", trial);
-          }
         }
       }
       rte_pktmbuf_free(m);
     }
 
+    auto num_trials = 0;
     auto num_enqueued = 0;
     while ((num_enqueued += rte_ring_sp_enqueue_burst(
                 inbound_ring_, (void **)rx_payloads_buf + num_enqueued,
                 nb_rx - num_enqueued, nullptr)) < nb_rx) {
+      num_trials++;
       rte_pause();
     }
+
+    printf("num_trials: %u\n", num_trials);
   }
 
   rte_ring *inbound_ring_{nullptr};
