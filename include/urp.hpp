@@ -230,10 +230,10 @@ private:
       if (rcv.opcode == OPCODE_DATA) {
         // Learn peer MAC from frame src
         struct rte_ether_hdr *eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
-        if (!have_learned_peer_) {
-          rte_ether_addr_copy(&eth->src_addr, &learned_peer_);
-          have_learned_peer_ = true;
-        }
+        // if (!have_learned_peer_) {
+        rte_ether_addr_copy(&eth->src_addr, &learned_peer_);
+        have_learned_peer_ = true;
+        // }
 
         // No sequence checking - accept all packets
         // auto payload = rx_payloads_buf[rx_payloads_buf_idx_++ % BURST_SIZE];
