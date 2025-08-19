@@ -7,7 +7,9 @@
 #include <rte_ring.h>
 #include <thread>
 
+#include "arg.hpp"
 #include "urp.hpp"
+#include <argparse/argparse.hpp>
 
 using namespace urp;
 
@@ -76,13 +78,20 @@ static int rx_thread_main(void *arg) {
   return 0;
 }
 
+using namespace argparse;
+
 int main(int argc, char **argv) {
   int ret = rte_eal_init(argc, argv);
   if (ret < 0)
     return 1;
 
+  argc -= ret;
+  argv += ret;
+
   EndpointConfig cfg{};
-  cfg.port_id = 0;
+
+  parse_args(argc, argv, cfg);
+
   // Default to broadcast if peer not known yet
   static const rte_ether_addr BCAST = {{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}};
   cfg.default_peer_mac = BCAST;

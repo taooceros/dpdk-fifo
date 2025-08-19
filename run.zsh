@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 set -e
 
-sudo tmux kill-session -t sigproc || true
+tmux kill-session -t sigproc || true
 
 MODE="${1:-local}"  # local | remote
 
@@ -23,8 +23,8 @@ if [[ "$MODE" == "local" ]]; then
   sudo tmux new-session -d -s sigproc \; \
   split-window -h \; \
   setw -g mouse on \; \
-  send-keys -t 0 "$client_path $client_args" C-m \; \
-  send-keys -t 1 "/home/hongtao/.cargo/bin/samply record $server_path $server_args" C-m \; \
+  send-keys -t 0 "$client_path $client_args --" C-m \; \
+  send-keys -t 1 "/home/hongtao/.cargo/bin/samply record $server_path $server_args --" C-m \; \
   attach
 elif [[ "$MODE" == "remote" ]]; then
   abs_server_path="$remote_dir/$server_path"
@@ -32,9 +32,9 @@ elif [[ "$MODE" == "remote" ]]; then
   ssh "$remote_host" "mkdir -p '$abs_server_dir'"
   scp "$server_path" "$remote_host":"$abs_server_path"
 
-  sudo $client_path -l 0-7 -a 2a:00.1
+  sudo $client_path -l 0-7 -a 2a:00.1 --
 elif [[ "$MODE" == "marvell" ]]; then
-  sudo $client_path -l 0-7 -a 2a:00.0
+  sudo $client_path -l 0-7 -a 2a:00.0 --
 fi
 
 tmux kill-session -t sigproc || true

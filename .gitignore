@@ -9,3 +9,7 @@ build/
 .cache/
 
 compile_commands.json
+
+benchmark_results/
+
+profile.json.gz

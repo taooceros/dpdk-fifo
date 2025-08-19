@@ -8,7 +8,11 @@
 #include <rte_ring_peek_zc.h>
 #include <thread>
 
+#include "arg.hpp"
 #include "urp.hpp"
+#include <argparse/argparse.hpp>
+
+using namespace argparse;
 
 using namespace urp;
 
@@ -86,8 +90,13 @@ int main(int argc, char **argv) {
   if (ret < 0)
     return 1;
 
+  argc -= ret;
+  argv += ret;
+
   EndpointConfig cfg{};
-  cfg.port_id = 0;
+
+  parse_args(argc, argv, cfg);
+
   // No default peer; will learn from inbound frames and reply
   memset(&cfg.default_peer_mac, 0, sizeof(cfg.default_peer_mac));
 

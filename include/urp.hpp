@@ -11,6 +11,7 @@
 #include <rte_mempool.h>
 #include <rte_ring.h>
 #include <rte_ring_core.h>
+#include <vector>
 
 #include "common.hpp"
 
@@ -18,7 +19,7 @@
 // ACKs
 namespace urp {
 
-static constexpr size_t BURST_SIZE = 128;
+static constexpr size_t DEFAULT_BURST_SIZE = 128;
 static constexpr size_t RX_DESC_DEFAULT = 256;
 static constexpr size_t TX_DESC_DEFAULT = 256;
 
@@ -71,6 +72,9 @@ struct EndpointConfig {
   rte_ether_addr default_peer_mac;
   // Queue sizes
   uint32_t ring_size = 4096;
+
+  uint32_t tx_burst_size = DEFAULT_BURST_SIZE;
+  uint32_t rx_burst_size = DEFAULT_BURST_SIZE;
 };
 
 class URPEndpoint {
@@ -101,10 +105,13 @@ public:
     if (!outbound_ring_)
       panic("Failed to create URP outbound ring");
 
-    for (uint32_t i = 0; i < BURST_SIZE; ++i) {
+    for (uint32_t i = 0; i < DEFAULT_BURST_SIZE; ++i) {
       rx_payloads_buf[i] =
           (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
     }
+
+    tx_payloads_ptr_buf = std::vector<Payload *>(DEFAULT_BURST_SIZE);
+    tx_bufs_ptr_buf = std::vector<struct rte_mbuf *>(DEFAULT_BURST_SIZE);
 
     // Initialize state
     tx_seq_ = 0;
@@ -125,25 +132,28 @@ public:
     rx();
   }
 
-  Payload *tx_payloads[BURST_SIZE];
-  struct rte_mbuf *tx_bufs[BURST_SIZE];
+  std::vector<Payload *> tx_payloads_ptr_buf;
+  std::vector<struct rte_mbuf *> tx_bufs_ptr_buf;
   void tx() {
     uint32_t nb_payloads = 0;
     // Send packets from outbound ring - fire and forget, no ACK handling
+
     if ((nb_payloads = rte_ring_sc_dequeue_burst(
-             outbound_ring_, (void **)tx_payloads, BURST_SIZE, nullptr)) != 0) {
+             outbound_ring_, (void **)tx_payloads_ptr_buf.data(),
+             DEFAULT_BURST_SIZE, nullptr)) != 0) {
       const rte_ether_addr *dst =
           have_learned_peer_ ? &learned_peer_ : &peer_mac_default_;
       for (uint32_t i = 0; i < nb_payloads; ++i) {
-        struct rte_mbuf *m = build_data_frame(dst, tx_payloads[i], tx_seq_++);
+        struct rte_mbuf *m =
+            build_data_frame(dst, tx_payloads_ptr_buf[i], tx_seq_++);
         if (m) {
-          tx_bufs[i] = m;
+          tx_bufs_ptr_buf[i] = m;
         }
       }
       uint16_t sent = 0;
 
       while (sent < nb_payloads) {
-        sent += rte_eth_tx_burst(cfg_.port_id, 0, tx_bufs + sent,
+        sent += rte_eth_tx_burst(cfg_.port_id, 0, tx_bufs_ptr_buf.data() + sent,
                                  nb_payloads - sent);
       }
     }
@@ -151,8 +161,9 @@ public:
 
   void rx() {
     // Receive packets and enqueue to inbound ring - no ACK needed
-    struct rte_mbuf *rx_bufs[BURST_SIZE];
-    uint16_t nb_rx = rte_eth_rx_burst(cfg_.port_id, 0, rx_bufs, BURST_SIZE);
+    struct rte_mbuf *rx_bufs[DEFAULT_BURST_SIZE];
+    uint16_t nb_rx =
+        rte_eth_rx_burst(cfg_.port_id, 0, rx_bufs, DEFAULT_BURST_SIZE);
 
     for (uint16_t i = 0; i < nb_rx; ++i) {
       struct rte_mbuf *m = rx_bufs[i];
@@ -268,7 +279,7 @@ private:
   rte_ring *outbound_ring_{nullptr};
 
   uint32_t rx_payloads_buf_idx_{0};
-  Payload *rx_payloads_buf[BURST_SIZE];
+  Payload *rx_payloads_buf[DEFAULT_BURST_SIZE];
 
   EndpointConfig cfg_;
   struct rte_mempool *mbuf_pool_{nullptr};
