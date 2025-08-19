@@ -249,7 +249,7 @@ private:
     auto num_enqueued = 0;
     while ((num_enqueued += rte_ring_sp_enqueue_bulk(
                 inbound_ring_, (void **)rx_payloads_buf + num_enqueued,
-                BURST_SIZE, nullptr)) < BURST_SIZE) {
+                nb_rx - num_enqueued, nullptr)) < BURST_SIZE) {
       rte_pause();
     }
   }
