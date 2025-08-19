@@ -18,13 +18,13 @@ remote_host="${REMOTE_HOST:-venus}"
 remote_dir="$PWD"
 
 if [[ "$MODE" == "local" ]]; then
-  client_args="-l 0-3 --vdev=net_memif0,role=slave,socket=/tmp/memif.sock --file-prefix=client"
-  server_args="-l 4-7 --vdev=net_memif0,role=master,socket=/tmp/memif.sock --file-prefix=server"
+  client_args="-l 0-8 --vdev=net_memif0,role=slave,socket=/tmp/memif.sock --file-prefix=client"
+  server_args="-l 9-15 --vdev=net_memif0,role=master,socket=/tmp/memif.sock --file-prefix=server"
   sudo tmux new-session -d -s sigproc \; \
   split-window -h \; \
   setw -g mouse on \; \
   send-keys -t 0 "$client_path $client_args" C-m \; \
-  send-keys -t 1 "/home/hongtao/.cargo/bin/samply record -- $server_path $server_args" C-m \; \
+  send-keys -t 1 "$server_path $server_args" C-m \; \
   attach
 elif [[ "$MODE" == "remote" ]]; then
   abs_server_path="$remote_dir/$server_path"

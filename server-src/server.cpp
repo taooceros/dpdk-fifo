@@ -36,22 +36,20 @@ static int responder_thread_main(void *arg) {
         double throughput = delta / seconds;
         last_time = now;
         last_count = total_count;
-        printf("total_count: %lu, last_count: %lu, delta: %lu, "
-               "throughput: %f\n in %f seconds",
-               total_count, last_count, delta, throughput, seconds);
+        printf("throughput: %f\n", throughput);
       }
 
-      // uint16_t num_enqueued = 0;
-      // uint32_t free_space;
-      // while ((num_enqueued +=
-      //         rte_ring_sp_enqueue_burst(out, (void **)msg, count - num_enqueued,
-      //                                   &free_space)) < count) {
-      //   {
-      //     rte_pause();
-      //     printf("num_enqueued: %u, count: %lu, free_space: %u\n", num_enqueued,
-      //            count, free_space);
-      //   }
-      // }
+      uint16_t num_enqueued = 0;
+      uint32_t free_space;
+      while ((num_enqueued +=
+              rte_ring_sp_enqueue_burst(out, (void **)msg, count - num_enqueued,
+                                        &free_space)) < count) {
+        {
+          rte_pause();
+          printf("num_enqueued: %u, count: %lu, free_space: %u\n", num_enqueued,
+                 count, free_space);
+        }
+      }
     } else {
       rte_pause();
     }

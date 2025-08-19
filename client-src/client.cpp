@@ -22,8 +22,8 @@ static int producer_thread_main(void *arg) {
   Payload *payloads[1024] = {};
 
   for (uint32_t i = 0; i < 1024; ++i) {
-    payloads[i] = (Payload *)rte_zmalloc(NULL, sizeof(Payload),
-                                         RTE_CACHE_LINE_SIZE);
+    payloads[i] =
+        (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
   }
 
   for (;;) {
@@ -39,20 +39,20 @@ static int producer_thread_main(void *arg) {
     }
     enqueue_count++;
     ++i;
-    if (i % 100000 == 0) {
+    const uint64_t report_interval = 1000000;
+    if (i % report_interval == 0) {
       uint32_t now = rte_get_tsc_cycles();
       double seconds = (now - last_time) / (double)rte_get_tsc_hz();
-      double throughput = 100000 / seconds;
+      double throughput = report_interval / seconds;
       printf("throughput: %f\n", throughput);
       last_time = now;
 
-      printf("enqueue_count: %d, ring_full_count: %d (ratio: %f)\n",
-             enqueue_count, ring_full_count,
-             (double)ring_full_count / enqueue_count);
+      // printf("enqueue_count: %d, ring_full_count: %d (ratio: %f)\n",
+      //        enqueue_count, ring_full_count,
+      //        (double)ring_full_count / enqueue_count);
       enqueue_count = 0;
       ring_full_count = 0;
     }
-    // std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   return 0;
 }
@@ -98,13 +98,15 @@ int main(int argc, char **argv) {
                         ep->outbound_ring(), producer_lcore);
 
   // Optionally consume inbound DATA if server also sends
-  uint64_t rtt_count = 0;
+  uint64_t count = 0;
   long double rtt_sum_us = 0.0L;
   const uint64_t report_interval = 10000;
+  uint64_t last_time = 0;
   for (;;) {
     Payload *msg = nullptr;
     if (rte_ring_sc_dequeue(ep->inbound_ring(), (void **)&msg) == 0) {
       // Compute RTT latency using embedded TSC timestamp
+      count++;
       if (msg->size >= sizeof(uint64_t)) {
         uint64_t send_tsc = 0;
         rte_memcpy(&send_tsc, msg->data, sizeof(send_tsc));
@@ -112,18 +114,17 @@ int main(int argc, char **argv) {
         uint64_t diff = now - send_tsc;
         double us = (double)diff * 1e6 / (double)rte_get_tsc_hz();
         rtt_sum_us += us;
-        rtt_count++;
-        if (rtt_count % report_interval == 0) {
-          double avg_us = (double)(rtt_sum_us / (long double)report_interval);
-          printf("Average RTT latency: %.2f us over %" PRIu64 " msgs\n", avg_us,
-                 report_interval);
-          // report throughput in Mbps
-          double throughput = (double)(report_interval * 1e6 * 8) / rtt_sum_us;
-          printf("Throughput: %.2f Mbps\n", throughput);
-          rtt_sum_us = 0.0L;
-        }
       }
-      rte_free(msg);
+
+      if (count % report_interval == 0) {
+        auto now = rte_get_tsc_cycles();
+        double seconds = (now - last_time) / (double)rte_get_tsc_hz();
+        // report throughput in Mbps
+        double throughput = (double)(report_interval) / seconds;
+        printf("Throughput: %.2f\n", throughput);
+        rtt_sum_us = 0.0L;
+        last_time = now;
+      }
     } else {
     }
   }
