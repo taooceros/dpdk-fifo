@@ -18,13 +18,16 @@ static int producer_thread_main(void *arg) {
   printf("Producer thread running on lcore %u\n", rte_lcore_id());
   uint32_t enqueue_count = 0;
   uint32_t ring_full_count = 0;
+
+  Payload *payloads[1024] = {};
+
+  for (uint32_t i = 0; i < 1024; ++i) {
+    payloads[i] = (Payload *)rte_zmalloc(NULL, sizeof(Payload),
+                                         RTE_CACHE_LINE_SIZE);
+  }
+
   for (;;) {
-    Payload *rec =
-        (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
-    if (!rec) {
-      rte_pause();
-      continue;
-    }
+    Payload *rec = payloads[i % 1024];
     // Embed send timestamp (TSC cycles) for latency measurement
     rec->size = sizeof(uint64_t);
     uint64_t tsc = rte_get_tsc_cycles();
@@ -97,11 +100,10 @@ int main(int argc, char **argv) {
   // Optionally consume inbound DATA if server also sends
   uint64_t rtt_count = 0;
   long double rtt_sum_us = 0.0L;
-  const uint64_t report_interval = 1;
+  const uint64_t report_interval = 10000;
   for (;;) {
     Payload *msg = nullptr;
     if (rte_ring_sc_dequeue(ep->inbound_ring(), (void **)&msg) == 0) {
-      printf("Received message\n");
       // Compute RTT latency using embedded TSC timestamp
       if (msg->size >= sizeof(uint64_t)) {
         uint64_t send_tsc = 0;

@@ -17,33 +17,28 @@ static int responder_thread_main(void *arg) {
   rte_ring *out = ep->outbound_ring();
 
   uint64_t last_time = 0;
+  uint64_t total_count = 0;
+  uint64_t last_count = 0;
   uint64_t count = 0;
   const uint64_t report_interval = 100000; // report every 1M packets
-  for (;;) {
-    Payload *msg = nullptr;
-    if (rte_ring_sc_dequeue(in, (void **)&msg) == 0) {
-      count++;
-      if (count == 1) {
-        last_time = rte_get_tsc_cycles();
-      }
-      if (count % report_interval == 0) {
+  Payload *msg[1024];
+  while (true) {
+    if ((count = rte_ring_sc_dequeue_burst(in, (void **)&msg, 1024, nullptr)) >
+        0) {
+      total_count += count;
+      if (total_count - last_count > report_interval) {
         uint64_t now = rte_get_tsc_cycles();
         double seconds = (now - last_time) / (double)rte_get_tsc_hz();
-        double throughput = report_interval / seconds;
+        double throughput = (total_count - last_count) / seconds;
         printf("Throughput: %.2f msgs/sec\n", throughput);
         last_time = now;
+        last_count = total_count;
       }
 
-      Payload *resp =
-          (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
-      resp->size = msg->size;
-      rte_memcpy(resp->data, msg->data, resp->size);
-      while (rte_ring_sp_enqueue(out, resp) == -ENOBUFS) {
-        rte_pause();
-      }
-
-      // Optionally: printf("Received frame %p %u\n", msg, msg->seq);
-      rte_free(msg);
+      // while (rte_ring_sp_enqueue_bulk(out, (void **)msg, 1024, nullptr) ==
+      //        -ENOBUFS) {
+      //   rte_pause();
+      // }
     } else {
       rte_pause();
     }

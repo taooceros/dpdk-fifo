@@ -18,7 +18,7 @@
 // ACKs
 namespace urp {
 
-static constexpr size_t BURST_SIZE = 128;
+static constexpr size_t BURST_SIZE = 256;
 static constexpr size_t RX_DESC_DEFAULT = 256;
 static constexpr size_t TX_DESC_DEFAULT = 256;
 
@@ -39,7 +39,7 @@ struct urp_hdr {
   uint16_t version;     // Protocol version
   uint16_t opcode;      // Always OPCODE_DATA
   uint16_t payload_len; // Length of payload
-  uint8_t payload[MAX_PAYLOAD];
+  uint8_t payload[];
 };
 
 static inline int port_init(uint16_t port_id, struct rte_mempool *pool) {
@@ -101,6 +101,11 @@ public:
     if (!outbound_ring_)
       panic("Failed to create URP outbound ring");
 
+    for (uint32_t i = 0; i < BURST_SIZE; ++i) {
+      rx_payloads_buf[i] =
+          (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
+    }
+
     // Initialize state
     tx_seq_ = 0;
     have_learned_peer_ = false;
@@ -132,7 +137,7 @@ public:
 private:
   struct rte_mbuf *build_data_frame(const rte_ether_addr *dst_mac,
                                     Payload *payload, uint32_t seq) {
-    size_t frame_len = sizeof(struct rte_ether_hdr) + sizeof(urp_hdr);
+    size_t frame_len = 100;
     struct rte_mbuf *m = rte_pktmbuf_alloc(mbuf_pool_);
     if (!m)
       return nullptr;
@@ -153,9 +158,9 @@ private:
     uh->version = rte_cpu_to_be_16(1);
     uh->opcode = rte_cpu_to_be_16(OPCODE_DATA);
     uh->seq = rte_cpu_to_be_32(seq);
-    uh->payload_len = rte_cpu_to_be_16(payload->size);
+    uh->payload_len = rte_cpu_to_be_16(16);
     if (payload->size > 0) {
-      rte_memcpy(uh->payload, payload->data, payload->size);
+      // rte_memcpy(uh->payload, payload->data, payload->size);
     }
     return m;
   }
@@ -164,8 +169,8 @@ private:
     urp_hdr hdr{};
     uint8_t *data = rte_pktmbuf_mtod(m, uint8_t *);
     size_t data_len = rte_pktmbuf_pkt_len(m);
-
-    if (data_len < sizeof(struct rte_ether_hdr) + sizeof(urp_hdr))
+    // printf("data_len: %u\n", data_len);
+    if (data_len < 100)
       return hdr;
 
     struct rte_ether_hdr *eth = (struct rte_ether_hdr *)data;
@@ -181,7 +186,7 @@ private:
     if (hdr.payload_len > MAX_PAYLOAD)
       hdr.payload_len = MAX_PAYLOAD;
     if (hdr.payload_len > 0) {
-      rte_memcpy(hdr.payload, uh->payload, hdr.payload_len);
+      // rte_memcpy(hdr.payload, uh->payload, hdr.payload_len);
     }
     return hdr;
   }
@@ -189,23 +194,25 @@ private:
   Payload *tx_payloads[BURST_SIZE];
   struct rte_mbuf *tx_bufs[BURST_SIZE];
   void tx() {
+
+    uint32_t nb_payloads = 0;
     // Send packets from outbound ring - fire and forget, no ACK handling
-    while (rte_ring_sc_dequeue_bulk(outbound_ring_, (void **)tx_payloads,
-                                    BURST_SIZE, nullptr) != 0) {
+    while ((nb_payloads =
+                rte_ring_sc_dequeue_burst(outbound_ring_, (void **)tx_payloads,
+                                          BURST_SIZE, nullptr)) != 0) {
       const rte_ether_addr *dst =
           have_learned_peer_ ? &learned_peer_ : &peer_mac_default_;
-      for (uint32_t i = 0; i < BURST_SIZE; ++i) {
+      for (uint32_t i = 0; i < nb_payloads; ++i) {
         struct rte_mbuf *m = build_data_frame(dst, tx_payloads[i], tx_seq_++);
         if (m) {
           tx_bufs[i] = m;
         }
       }
-      uint16_t sent = rte_eth_tx_burst(cfg_.port_id, 0, tx_bufs, BURST_SIZE);
-      for (uint32_t i = sent; i < BURST_SIZE; ++i) {
-        rte_pktmbuf_free(tx_bufs[i]);
-      }
-      for (uint32_t i = 0; i < BURST_SIZE; ++i) {
-        rte_free(tx_payloads[i]);
+      uint16_t sent = 0;
+
+      while (sent < nb_payloads) {
+        sent += rte_eth_tx_burst(cfg_.port_id, 0, tx_bufs + sent,
+                                 nb_payloads - sent);
       }
     }
   }
@@ -218,7 +225,6 @@ private:
     for (uint16_t i = 0; i < nb_rx; ++i) {
       struct rte_mbuf *m = rx_bufs[i];
       urp_hdr rcv = parse_frame(m);
-
       if (rcv.opcode == OPCODE_DATA) {
         // Learn peer MAC from frame src
         struct rte_ether_hdr *eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
@@ -226,22 +232,33 @@ private:
         have_learned_peer_ = true;
 
         // No sequence checking - accept all packets
-        auto payload =
-            (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
+        auto payload = rx_payloads_buf[rx_payloads_buf_idx_++ % BURST_SIZE];
         if (payload) {
-          payload->size = rcv.payload_len;
-          rte_memcpy(payload->data, rcv.payload, payload->size);
-          // Try to enqueue, drop if ring is full (unreliable!)
-          while (rte_ring_sp_enqueue(inbound_ring_, payload) == -ENOBUFS) {
+          // payload->size = rcv.payload_len;
+          // rte_memcpy(payload->data, rcv.payload, payload->size);
+          int trial = 0;
+
+          if (trial > 10000) {
+            printf("Trial: %u\n", trial);
           }
         }
       }
       rte_pktmbuf_free(m);
     }
+
+    auto num_enqueued = 0;
+    while ((num_enqueued += rte_ring_sp_enqueue_bulk(
+                inbound_ring_, (void **)rx_payloads_buf + num_enqueued,
+                BURST_SIZE, nullptr)) < BURST_SIZE) {
+      rte_pause();
+    }
   }
 
   rte_ring *inbound_ring_{nullptr};
   rte_ring *outbound_ring_{nullptr};
+
+  uint32_t rx_payloads_buf_idx_{0};
+  Payload *rx_payloads_buf[BURST_SIZE];
 
   EndpointConfig cfg_;
   struct rte_mempool *mbuf_pool_{nullptr};
