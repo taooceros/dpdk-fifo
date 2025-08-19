@@ -155,10 +155,10 @@ private:
     eth->ether_type = rte_cpu_to_be_16(ETH_TYPE);
 
     urp_hdr *uh = (urp_hdr *)(eth + 1);
-    uh->version = rte_cpu_to_be_16(1);
+    // uh->version = rte_cpu_to_be_16(1);
     uh->opcode = rte_cpu_to_be_16(OPCODE_DATA);
-    uh->seq = rte_cpu_to_be_32(seq);
-    uh->payload_len = rte_cpu_to_be_16(16);
+    // uh->seq = rte_cpu_to_be_32(seq);
+    // uh->payload_len = rte_cpu_to_be_16(16);
     if (payload->size > 0) {
       // rte_memcpy(uh->payload, payload->data, payload->size);
     }
@@ -178,10 +178,10 @@ private:
       return hdr;
 
     urp_hdr *uh = (urp_hdr *)(eth + 1);
-    hdr.seq = rte_be_to_cpu_32(uh->seq);
-    hdr.version = rte_be_to_cpu_16(uh->version);
+    // hdr.seq = rte_be_to_cpu_32(uh->seq);
+    // hdr.version = rte_be_to_cpu_16(uh->version);
     hdr.opcode = rte_be_to_cpu_16(uh->opcode);
-    hdr.payload_len = rte_be_to_cpu_16(uh->payload_len);
+    // hdr.payload_len = rte_be_to_cpu_16(uh->payload_len);
 
     if (hdr.payload_len > MAX_PAYLOAD)
       hdr.payload_len = MAX_PAYLOAD;
@@ -249,7 +249,7 @@ private:
     auto num_enqueued = 0;
     while ((num_enqueued += rte_ring_sp_enqueue_bulk(
                 inbound_ring_, (void **)rx_payloads_buf + num_enqueued,
-                nb_rx - num_enqueued, nullptr)) < BURST_SIZE) {
+                nb_rx - num_enqueued, nullptr)) < nb_rx) {
       rte_pause();
     }
   }
