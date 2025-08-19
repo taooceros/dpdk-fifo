@@ -18,7 +18,7 @@
 // ACKs
 namespace urp {
 
-static constexpr size_t BURST_SIZE = 256;
+static constexpr size_t BURST_SIZE = 128;
 static constexpr size_t RX_DESC_DEFAULT = 256;
 static constexpr size_t TX_DESC_DEFAULT = 256;
 
@@ -125,6 +125,75 @@ public:
     rx();
   }
 
+  Payload *tx_payloads[BURST_SIZE];
+  struct rte_mbuf *tx_bufs[BURST_SIZE];
+  void tx() {
+    uint32_t nb_payloads = 0;
+    // Send packets from outbound ring - fire and forget, no ACK handling
+    if ((nb_payloads = rte_ring_sc_dequeue_burst(
+             outbound_ring_, (void **)tx_payloads, BURST_SIZE, nullptr)) != 0) {
+      const rte_ether_addr *dst =
+          have_learned_peer_ ? &learned_peer_ : &peer_mac_default_;
+      for (uint32_t i = 0; i < nb_payloads; ++i) {
+        struct rte_mbuf *m = build_data_frame(dst, tx_payloads[i], tx_seq_++);
+        if (m) {
+          tx_bufs[i] = m;
+        }
+      }
+      uint16_t sent = 0;
+
+      while (sent < nb_payloads) {
+        sent += rte_eth_tx_burst(cfg_.port_id, 0, tx_bufs + sent,
+                                 nb_payloads - sent);
+      }
+    }
+  }
+
+  void rx() {
+    // Receive packets and enqueue to inbound ring - no ACK needed
+    struct rte_mbuf *rx_bufs[BURST_SIZE];
+    uint16_t nb_rx = rte_eth_rx_burst(cfg_.port_id, 0, rx_bufs, BURST_SIZE);
+
+    for (uint16_t i = 0; i < nb_rx; ++i) {
+      struct rte_mbuf *m = rx_bufs[i];
+      urp_hdr rcv = parse_frame(m);
+      if (rcv.opcode == OPCODE_DATA) {
+        // Learn peer MAC from frame src
+        struct rte_ether_hdr *eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
+        if (!have_learned_peer_) {
+          rte_ether_addr_copy(&eth->src_addr, &learned_peer_);
+          have_learned_peer_ = true;
+        }
+
+        // No sequence checking - accept all packets
+        // auto payload = rx_payloads_buf[rx_payloads_buf_idx_++ % BURST_SIZE];
+        // if (payload) {
+        //   // payload->size = rcv.payload_len;
+        //   // rte_memcpy(payload->data, rcv.payload, payload->size);
+        // }
+        rte_pktmbuf_free(m);
+      }
+    }
+
+    if (nb_rx > 0) {
+      uint32_t num_enqueued = 0;
+      while ((num_enqueued += rte_ring_sp_enqueue_burst(
+                  inbound_ring_, (void **)rx_payloads_buf, nb_rx - num_enqueued,
+                  nullptr)) < nb_rx) {
+        num_rx_trials_++;
+        if (num_enqueued == 0) {
+          rte_pause();
+        }
+      }
+      num_rx_trials_++;
+      num_rx_hit_++;
+
+      if (num_rx_hit_ % 100000 == 0) {
+        printf("rx hit: %f\n", (double)num_rx_hit_ / num_rx_trials_);
+      }
+    }
+  }
+
   ~URPEndpoint() {
     if (inbound_ring_)
       rte_ring_free(inbound_ring_);
@@ -174,10 +243,6 @@ private:
       return hdr;
 
     struct rte_ether_hdr *eth = (struct rte_ether_hdr *)data;
-    if (rte_be_to_cpu_16(eth->ether_type) != ETH_TYPE) {
-      panic("Invalid ETH_TYPE: %u", rte_be_to_cpu_16(eth->ether_type));
-      return hdr;
-    }
 
     urp_hdr *uh = (urp_hdr *)(eth + 1);
     // hdr.seq = rte_be_to_cpu_32(uh->seq);
@@ -193,70 +258,11 @@ private:
     return hdr;
   }
 
-  Payload *tx_payloads[BURST_SIZE];
-  struct rte_mbuf *tx_bufs[BURST_SIZE];
-  void tx() {
-    uint32_t nb_payloads = 0;
-    // Send packets from outbound ring - fire and forget, no ACK handling
-    while ((nb_payloads =
-                rte_ring_sc_dequeue_burst(outbound_ring_, (void **)tx_payloads,
-                                          BURST_SIZE, nullptr)) != 0) {
-      const rte_ether_addr *dst =
-          have_learned_peer_ ? &learned_peer_ : &peer_mac_default_;
-      for (uint32_t i = 0; i < nb_payloads; ++i) {
-        struct rte_mbuf *m = build_data_frame(dst, tx_payloads[i], tx_seq_++);
-        if (m) {
-          tx_bufs[i] = m;
-        }
-      }
-      uint16_t sent = 0;
-
-      while (sent < nb_payloads) {
-        sent += rte_eth_tx_burst(cfg_.port_id, 0, tx_bufs + sent,
-                                 nb_payloads - sent);
-      }
-    }
-  }
-
-  void rx() {
-    // Receive packets and enqueue to inbound ring - no ACK needed
-    struct rte_mbuf *rx_bufs[BURST_SIZE];
-    uint16_t nb_rx = rte_eth_rx_burst(cfg_.port_id, 0, rx_bufs, BURST_SIZE);
-
-    for (uint16_t i = 0; i < nb_rx; ++i) {
-      struct rte_mbuf *m = rx_bufs[i];
-      urp_hdr rcv = parse_frame(m);
-      if (rcv.opcode == OPCODE_DATA) {
-        // Learn peer MAC from frame src
-        struct rte_ether_hdr *eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
-        if (!have_learned_peer_) {
-          rte_ether_addr_copy(&eth->src_addr, &learned_peer_);
-          have_learned_peer_ = true;
-        }
-
-        // No sequence checking - accept all packets
-        // auto payload = rx_payloads_buf[rx_payloads_buf_idx_++ % BURST_SIZE];
-        // if (payload) {
-        //   // payload->size = rcv.payload_len;
-        //   // rte_memcpy(payload->data, rcv.payload, payload->size);
-        // }
-        rte_pktmbuf_free(m);
-      }
-    }
-
-    uint32_t num_enqueued = 0;
-    while ((num_enqueued +=
-            rte_ring_sp_enqueue_burst(inbound_ring_, (void **)rx_payloads_buf,
-                                      nb_rx - num_enqueued, nullptr)) < nb_rx) {
-      printf("num_enqueued: %u, nb_rx: %u\n", num_enqueued, nb_rx);
-      if (num_enqueued == 0) {
-        rte_pause();
-      }
-    }
-  }
-
   uint64_t id = 0;
   uint32_t num_trials = 0;
+
+  uint32_t num_rx_trials_{0};
+  uint32_t num_rx_hit_{0};
 
   rte_ring *inbound_ring_{nullptr};
   rte_ring *outbound_ring_{nullptr};

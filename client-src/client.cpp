@@ -44,7 +44,7 @@ static int producer_thread_main(void *arg) {
       uint32_t now = rte_get_tsc_cycles();
       double seconds = (now - last_time) / (double)rte_get_tsc_hz();
       double throughput = report_interval / seconds;
-      printf("throughput: %f\n", throughput);
+      // printf("throughput: %f\n", throughput);
       last_time = now;
 
       // printf("enqueue_count: %d, ring_full_count: %d (ratio: %f)\n",
@@ -53,15 +53,25 @@ static int producer_thread_main(void *arg) {
       enqueue_count = 0;
       ring_full_count = 0;
     }
+    // std::this_thread::yield();
   }
   return 0;
 }
 
-static int event_thread_main(void *arg) {
+static int tx_thread_main(void *arg) {
   URPEndpoint *ep = reinterpret_cast<URPEndpoint *>(arg);
-  printf("Event thread running on lcore %u\n", rte_lcore_id());
+  printf("TX thread running on lcore %u\n", rte_lcore_id());
   for (;;) {
-    ep->progress();
+    ep->tx();
+  }
+  return 0;
+}
+
+static int rx_thread_main(void *arg) {
+  URPEndpoint *ep = reinterpret_cast<URPEndpoint *>(arg);
+  printf("RX thread running on lcore %u\n", rte_lcore_id());
+  for (;;) {
+    ep->rx();
   }
   return 0;
 }
@@ -83,14 +93,17 @@ int main(int argc, char **argv) {
   if (!ep)
     return 1;
 
-  unsigned event_lcore = rte_get_next_lcore(rte_lcore_id(), 1, 0);
-  if (event_lcore == RTE_MAX_LCORE) {
+  unsigned tx_lcore = rte_get_next_lcore(rte_lcore_id(), 1, 0);
+  if (tx_lcore == RTE_MAX_LCORE) {
     rte_exit(EXIT_FAILURE, "Not enough cores\n");
   }
-  rte_eal_remote_launch((lcore_function_t *)event_thread_main, ep, event_lcore);
+  rte_eal_remote_launch((lcore_function_t *)tx_thread_main, ep, tx_lcore);
+
+  unsigned rx_lcore = rte_get_next_lcore(tx_lcore, 1, 0);
+  rte_eal_remote_launch((lcore_function_t *)rx_thread_main, ep, rx_lcore);
 
   // Launch producer on a separate lcore
-  unsigned producer_lcore = rte_get_next_lcore(event_lcore, 1, 0);
+  unsigned producer_lcore = rte_get_next_lcore(rx_lcore, 1, 0);
   if (producer_lcore == RTE_MAX_LCORE) {
     rte_exit(EXIT_FAILURE, "Not enough cores\n");
   }
@@ -100,7 +113,7 @@ int main(int argc, char **argv) {
   // Optionally consume inbound DATA if server also sends
   uint64_t count = 0;
   long double rtt_sum_us = 0.0L;
-  const uint64_t report_interval = 10000;
+  const uint64_t report_interval = 100000;
   uint64_t last_time = 0;
   for (;;) {
     Payload *msg = nullptr;

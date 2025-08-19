@@ -5,6 +5,7 @@
 #include <rte_eal.h>
 #include <rte_ether.h>
 #include <rte_ring.h>
+#include <rte_ring_peek_zc.h>
 #include <thread>
 
 #include "urp.hpp"
@@ -23,11 +24,16 @@ static int responder_thread_main(void *arg) {
   uint64_t count = 0;
   double avg_count = 0;
   double num;
-  const uint64_t report_interval = 100000; // report every 1M packets
-  Payload *msg[1024];
+  const uint64_t report_interval = 1000000; // report every 1M packets
+  const uint32_t burst_size = 1024;
+  Payload *msg[burst_size];
+  struct rte_ring_zc_data zcd;
+  size_t counter = 0;
+  size_t counter_hit = 0;
   while (true) {
-    if ((count = rte_ring_sc_dequeue_burst(in, (void **)&msg, 1024, nullptr)) >
-        0) {
+    counter++;
+    if ((count = rte_ring_dequeue_zc_burst_start(in, burst_size, &zcd,
+                                                 nullptr)) > 0) {
       total_count += count;
       if (total_count - last_count > report_interval) {
         uint64_t now = rte_get_tsc_cycles();
@@ -36,20 +42,20 @@ static int responder_thread_main(void *arg) {
         double throughput = delta / seconds;
         last_time = now;
         last_count = total_count;
-        printf("throughput: %f\n", throughput);
+        printf("throughput: %f, hit: %f\n", throughput,
+               (double)counter_hit / counter);
       }
 
       uint16_t num_enqueued = 0;
       uint32_t free_space;
       while ((num_enqueued +=
-              rte_ring_sp_enqueue_burst(out, (void **)msg, count - num_enqueued,
-                                        &free_space)) < count) {
-        {
-          rte_pause();
-          printf("num_enqueued: %u, count: %lu, free_space: %u\n", num_enqueued,
-                 count, free_space);
-        }
+              rte_ring_enqueue_burst(out, (void **)msg, count - num_enqueued,
+                                     &free_space)) < count) {
+        rte_pause();
       }
+      counter_hit++;
+
+      rte_ring_dequeue_zc_finish(in, count);
     } else {
       rte_pause();
     }
@@ -57,11 +63,20 @@ static int responder_thread_main(void *arg) {
   return 0;
 }
 
-static int event_thread_main(void *arg) {
+static int tx_thread_main(void *arg) {
   URPEndpoint *ep = reinterpret_cast<URPEndpoint *>(arg);
-  printf("Event thread running on lcore %u\n", rte_lcore_id());
+  printf("TX thread running on lcore %u\n", rte_lcore_id());
   for (;;) {
-    ep->progress();
+    ep->tx();
+  }
+  return 0;
+}
+
+static int rx_thread_main(void *arg) {
+  URPEndpoint *ep = reinterpret_cast<URPEndpoint *>(arg);
+  printf("RX thread running on lcore %u\n", rte_lcore_id());
+  for (;;) {
+    ep->rx();
   }
   return 0;
 }
@@ -81,11 +96,14 @@ int main(int argc, char **argv) {
     return 1;
 
   // Launch a responder thread to echo data back
-  unsigned event_lcore = rte_get_next_lcore(rte_lcore_id(), 1, 0);
+  unsigned tx_lcore = rte_get_next_lcore(rte_lcore_id(), 1, 0);
 
-  rte_eal_remote_launch((lcore_function_t *)event_thread_main, ep, event_lcore);
+  rte_eal_remote_launch((lcore_function_t *)tx_thread_main, ep, tx_lcore);
 
-  unsigned worker_lcore = rte_get_next_lcore(event_lcore, 1, 0);
+  unsigned rx_lcore = rte_get_next_lcore(tx_lcore, 1, 0);
+  rte_eal_remote_launch((lcore_function_t *)rx_thread_main, ep, rx_lcore);
+
+  unsigned worker_lcore = rte_get_next_lcore(rx_lcore, 1, 0);
 
   rte_eal_remote_launch((lcore_function_t *)responder_thread_main, ep,
                         worker_lcore);
