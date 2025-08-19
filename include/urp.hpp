@@ -243,9 +243,6 @@ private:
       rte_pktmbuf_free(m);
     }
 
-    static uint64_t id = 0;
-    static uint32_t num_trials = 0;
-    static uint32_t num_enqueued = 0;
     while ((num_enqueued += rte_ring_sp_enqueue_burst(
                 inbound_ring_, (void **)rx_payloads_buf + num_enqueued,
                 nb_rx - num_enqueued, nullptr)) < nb_rx) {
@@ -259,6 +256,10 @@ private:
              (double)id / num_trials);
     }
   }
+
+  uint64_t id = 0;
+  uint32_t num_trials = 0;
+  uint32_t num_enqueued = 0;
 
   rte_ring *inbound_ring_{nullptr};
   rte_ring *outbound_ring_{nullptr};
