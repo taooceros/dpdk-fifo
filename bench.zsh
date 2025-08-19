@@ -73,7 +73,7 @@ build_project() {
     xmake f -m "$RELEASE"
     xmake
     
-    if [[ ! -f "build/linux/x86_64/${RELEASE}/client" ]] || [[ ! -f "build/linux/x86_64/${RELEASE}/server" ]]; then
+    if [[ ! -f "build/linux/${ARCH}/${RELEASE}/client" ]] || [[ ! -f "build/linux/${ARCH}/${RELEASE}/server" ]]; then
         error "Build failed - binaries not found"
         exit 1
     fi
@@ -90,7 +90,7 @@ start_server() {
     
     # Start server in background with output redirected
     sudo timeout "$((TEST_DURATION))" \
-        "build/linux/x86_64/${RELEASE}/server" \
+        "build/linux/${ARCH}/${RELEASE}/server" \
         -l 9-15 --file-prefix=server -- \
         --tx-burst "$burst_size" --rx-burst "$burst_size" \
         2>&1 > "$server_log"
@@ -122,7 +122,7 @@ run_client_test() {
     
     # Start client and capture output
     sudo timeout "$TEST_DURATION" \
-        "build/linux/x86_64/${RELEASE}/client" \
+        "build/linux/${ARCH}/${RELEASE}/client" \
         -l 0-7 -a "$CLIENT_PCI" --file-prefix=client -- \
         --tx-burst "$burst_size" --rx-burst "$burst_size" \
         > "$client_log" 2>&1 || true
@@ -157,8 +157,8 @@ run_burst_test() {
     echo "========================================"
     log "Starting test for burst size: $burst_size"
     echo "========================================"
-    
-    
+
+
     # Run client test
     for size in "${BURST_SIZES[@]}"; do
         run_client_test "$size"
@@ -248,6 +248,8 @@ cleanup() {
     sudo pkill -f "client\|server" 2>/dev/null || true
     
     log "Cleanup completed"
+
+    exit 0
 }
 
 # Main execution
@@ -261,6 +263,17 @@ main() {
     log "Test duration per burst size: ${TEST_DURATION}s"
     echo ""
     
+    ARCH=$(uname -m)
+
+    if [[ "$ARCH" == "x86_64" ]]; then
+        ARCH="x86_64"
+    elif [[ "$ARCH" == "aarch64" ]]; then
+        ARCH="arm64"
+    else
+        error "Unsupported architecture: $ARCH"
+        exit 1
+    fi
+
     # Setup
     setup_results_dir
     build_project
