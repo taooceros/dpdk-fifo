@@ -42,10 +42,8 @@ end
 target("client")
     set_kind("binary")
     add_files("client-src/*.cpp", "common/*.cpp")
-    add_packages("pkgconfig::libdpdk")
 
 
 target("server")
     set_kind("binary")
     add_files("server-src/*.cpp", "common/*.cpp")
-    add_packages("pkgconfig::libdpdk")
