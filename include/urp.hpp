@@ -230,31 +230,33 @@ private:
       if (rcv.opcode == OPCODE_DATA) {
         // Learn peer MAC from frame src
         struct rte_ether_hdr *eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
-        rte_ether_addr_copy(&eth->src_addr, &learned_peer_);
-        have_learned_peer_ = true;
+        if (!have_learned_peer_) {
+          rte_ether_addr_copy(&eth->src_addr, &learned_peer_);
+          have_learned_peer_ = true;
+        }
 
         // No sequence checking - accept all packets
-        auto payload = rx_payloads_buf[rx_payloads_buf_idx_++ % BURST_SIZE];
-        if (payload) {
-          // payload->size = rcv.payload_len;
-          // rte_memcpy(payload->data, rcv.payload, payload->size);
-        }
+        // auto payload = rx_payloads_buf[rx_payloads_buf_idx_++ % BURST_SIZE];
+        // if (payload) {
+        //   // payload->size = rcv.payload_len;
+        //   // rte_memcpy(payload->data, rcv.payload, payload->size);
+        // }
+        rte_pktmbuf_free(m);
       }
-      rte_pktmbuf_free(m);
-    }
-    uint32_t num_enqueued = 0;
+      uint32_t num_enqueued = 0;
 
-    while ((num_enqueued += rte_ring_sp_enqueue_burst(
-                inbound_ring_, (void **)rx_payloads_buf + num_enqueued,
-                nb_rx - num_enqueued, nullptr)) < nb_rx) {
+      while ((num_enqueued += rte_ring_sp_enqueue_burst(
+                  inbound_ring_, (void **)rx_payloads_buf + num_enqueued,
+                  nb_rx - num_enqueued, nullptr)) < nb_rx) {
+        num_trials++;
+        rte_pause();
+      }
       num_trials++;
-      rte_pause();
-    }
-    num_trials++;
-    id++;
-    if (id % 100000 == 0) {
-      printf("id: %lu, num_trials: %u [%.2f]\n", id, num_trials,
-             (double)id / num_trials);
+      id++;
+      if (id % 100000 == 0) {
+        printf("id: %lu, num_trials: %u [%.2f]\n", id, num_trials,
+               (double)id / num_trials);
+      }
     }
   }
 

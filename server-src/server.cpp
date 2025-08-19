@@ -20,6 +20,8 @@ static int responder_thread_main(void *arg) {
   uint64_t total_count = 0;
   uint64_t last_count = 0;
   uint64_t count = 0;
+  uint64_t avg_count = 0;
+  uint64_t num;
   const uint64_t report_interval = 1000000; // report every 1M packets
   Payload *msg[1024];
   while (true) {
@@ -30,10 +32,13 @@ static int responder_thread_main(void *arg) {
         uint64_t now = rte_get_tsc_cycles();
         double seconds = (now - last_time) / (double)rte_get_tsc_hz();
         double throughput = (total_count - last_count) / seconds;
-        printf("Throughput: %.2f msgs/sec\n", throughput);
+        printf("Throughput: %.2f msgs/sec, avg: %lu\n", throughput, avg_count);
         last_time = now;
         last_count = total_count;
       }
+
+      avg_count = (count + avg_count * num) / (num + 1);
+      num++;
 
       // while (rte_ring_sp_enqueue_bulk(out, (void **)msg, 1024, nullptr) ==
       //        -ENOBUFS) {
