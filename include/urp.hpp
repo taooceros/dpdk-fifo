@@ -243,8 +243,9 @@ private:
       rte_pktmbuf_free(m);
     }
 
-    auto num_trials = 0;
-    auto num_enqueued = 0;
+    static uint64_t id = 0;
+    static uint32_t num_trials = 0;
+    static uint32_t num_enqueued = 0;
     while ((num_enqueued += rte_ring_sp_enqueue_burst(
                 inbound_ring_, (void **)rx_payloads_buf + num_enqueued,
                 nb_rx - num_enqueued, nullptr)) < nb_rx) {
@@ -252,7 +253,11 @@ private:
       rte_pause();
     }
 
-    printf("num_trials: %u\n", num_trials);
+    id++;
+    if (id++ % 100000 == 0) {
+      printf("id: %lu, num_trials: %u [%.2f]\n", id, num_trials,
+             (double)id / num_trials);
+    }
   }
 
   rte_ring *inbound_ring_{nullptr};
