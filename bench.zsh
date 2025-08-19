@@ -10,6 +10,7 @@ TEST_DURATION="${TEST_DURATION:-5}"  # seconds per test
 RESULTS_DIR="${RESULTS_DIR:-benchmark_results}"
 SERVER_TIMEOUT="${SERVER_TIMEOUT:-5}"  # seconds to wait for server startup
 CLIENT_PCI="${CLIENT_PCI:-2a:00.0}"   # Marvell SmartNIC PCI address
+MODE="${MODE:-client}"
 
 # Burst sizes to test (powers of 2)
 BURST_SIZES=(1 2 4 8 16 32 64 128 256)
@@ -148,6 +149,75 @@ run_client_test() {
     fi
 }
 
+run_server_test() {
+    local burst_size=$1
+    local server_log="$RESULTS_DIR/server_burst_${burst_size}.log"
+    local server_results="$RESULTS_DIR/results_burst_${burst_size}.txt"
+    
+    echo ""
+    log "Running server test with burst size $burst_size for ${TEST_DURATION}s..."
+
+    # Start server and capture output
+    sudo timeout "$TEST_DURATION" \
+        "build/linux/${ARCH}/${RELEASE}/server" \
+        -l 9-15 --file-prefix=server -- \
+        --tx-burst "$burst_size" --rx-burst "$burst_size" \
+        > "$server_log" 2>&1 || true
+
+    # Extract metrics from server log
+    if [[ -f "$server_log" ]]; then
+        # Extract throughput data
+        grep "Throughput:" "$server_log" | tail -10 > "$server_results" 2>/dev/null || true
+
+        # Calculate average throughput and hit rate from last 10 measurements
+        # Expected format: "throughput: 21971517.134275, hit: 0.003079"
+        metrics=$(
+            grep -i 'throughput:' "$server_log" | tail -n 10 | awk '
+            {
+                # Extract throughput and hit values from format: "throughput: X, hit: Y"
+                if ($0 ~ /throughput:/) {
+                    # Split on comma to get throughput and hit parts
+                    n = split($0, parts, ",")
+                    if (n >= 2) {
+                        # Extract throughput value
+                        if (match(parts[1], /[0-9]+\.?[0-9]*([eE][+-]?[0-9]+)?/)) {
+                            throughput_val = substr(parts[1], RSTART, RLENGTH)
+                            throughput_sum += throughput_val
+                        }
+                        # Extract hit value
+                        if (match(parts[2], /[0-9]+\.?[0-9]*([eE][+-]?[0-9]+)?/)) {
+                            hit_val = substr(parts[2], RSTART, RLENGTH)
+                            hit_sum += hit_val
+                        }
+                        cnt++
+                    }
+                }
+            }
+            END { 
+                if (cnt > 0) {
+                    printf "%.6f %.6f\n", throughput_sum/cnt, hit_sum/cnt
+                } else {
+                    print "0 0"
+                }
+            }'
+        )
+        
+        avg_throughput=$(echo "$metrics" | awk '{print $1}')
+        avg_hit_rate=$(echo "$metrics" | awk '{print $2}')
+
+        echo "burst_size:$burst_size" >> "$server_results"
+        echo "avg_throughput:$avg_throughput" >> "$server_results"
+        echo "avg_hit_rate:$avg_hit_rate" >> "$server_results"
+        echo "test_duration:$TEST_DURATION" >> "$server_results"
+        echo "timestamp:$(date '+%Y-%m-%d %H:%M:%S')" >> "$server_results"
+        
+        echo ""
+        success "Server test completed. Avg throughput: $avg_throughput packets/sec, Hit rate: $avg_hit_rate"
+    else
+        error "Server log not found: $server_log"
+    fi
+}
+
 
 # Function to run single burst size test
 run_burst_test() {
@@ -161,7 +231,11 @@ run_burst_test() {
 
     # Run client test
     for size in "${BURST_SIZES[@]}"; do
-        run_client_test "$size"
+        if [[ "$MODE" == "client" ]]; then
+            run_client_test "$size"
+        elif [[ "$MODE" == "server" ]]; then
+            run_server_test "$size"
+        fi
         sleep 2
     done
     
@@ -185,20 +259,38 @@ generate_summary() {
         echo ""
         echo "Results by Burst Size:"
         echo "----------------------"
-        printf "%-12s %-20s %-15s\n" "Burst Size" "Avg Throughput" "Status"
-        printf "%-12s %-20s %-15s\n" "----------" "---------------" "------"
+        if [[ "$MODE" == "server" ]]; then
+            printf "%-12s %-20s %-15s %-15s\n" "Burst Size" "Avg Throughput" "Avg Hit Rate" "Status"
+            printf "%-12s %-20s %-15s %-15s\n" "----------" "---------------" "------------" "------"
+        else
+            printf "%-12s %-20s %-15s\n" "Burst Size" "Avg Throughput" "Status"
+            printf "%-12s %-20s %-15s\n" "----------" "---------------" "------"
+        fi
         
         for burst_size in "${BURST_SIZES[@]}"; do
             local results_file="$RESULTS_DIR/results_burst_${burst_size}.txt"
             if [[ -f "$results_file" ]]; then
                 local throughput=$(grep "avg_throughput:" "$results_file" | cut -d: -f2)
                 if [[ -n "$throughput" ]] && [[ "$throughput" != "0" ]]; then
-                    printf "%-12s %-20.0f %-15s\n" "$burst_size" "$throughput" "SUCCESS"
+                    if [[ "$MODE" == "server" ]]; then
+                        local hit_rate=$(grep "avg_hit_rate:" "$results_file" | cut -d: -f2)
+                        printf "%-12s %-20.0f %-15.6f %-15s\n" "$burst_size" "$throughput" "$hit_rate" "SUCCESS"
+                    else
+                        printf "%-12s %-20.0f %-15s\n" "$burst_size" "$throughput" "SUCCESS"
+                    fi
                 else
-                    printf "%-12s %-20s %-15s\n" "$burst_size" "N/A" "FAILED"
+                    if [[ "$MODE" == "server" ]]; then
+                        printf "%-12s %-20s %-15s %-15s\n" "$burst_size" "N/A" "N/A" "FAILED"
+                    else
+                        printf "%-12s %-20s %-15s\n" "$burst_size" "N/A" "FAILED"
+                    fi
                 fi
             else
-                printf "%-12s %-20s %-15s\n" "$burst_size" "N/A" "NOT_RUN"
+                if [[ "$MODE" == "server" ]]; then
+                    printf "%-12s %-20s %-15s %-15s\n" "$burst_size" "N/A" "N/A" "NOT_RUN"
+                else
+                    printf "%-12s %-20s %-15s\n" "$burst_size" "N/A" "NOT_RUN"
+                fi
             fi
         done
         
@@ -325,6 +417,7 @@ Options:
     -o, --output DIR        Results directory prefix (default: benchmark_results)
     -p, --pci ADDRESS       Client PCI address (default: 2a:00.0)
     -t, --timeout SECONDS   Server startup timeout (default: 5)
+    -m, --mode MODE         Test mode: client|server (default: client)
 
 Environment Variables:
     TEST_DURATION   Test duration in seconds
@@ -365,6 +458,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -t|--timeout)
             SERVER_TIMEOUT="$2"
+            shift 2
+            ;;
+        -m|--mode)
+            MODE="$2"
             shift 2
             ;;
         *)
