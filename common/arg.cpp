@@ -25,6 +25,12 @@ void parse_args(int argc, char **argv, urp::EndpointConfig &cfg) {
         cfg.rx_burst_size = std::stoi(value);
       });
 
+  parser.add_argument("-s", "--size")
+      .help("Size of the cache")
+      .default_value(0)
+      .action(
+          [&](const std::string &value) { cfg.unit_size = std::stoi(value); });
+
   try {
     parser.parse_args(argc, argv);
   } catch (const std::runtime_error &err) {

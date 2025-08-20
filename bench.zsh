@@ -14,6 +14,7 @@ MODE="${MODE:-client}"
 
 # Burst sizes to test (powers of 2)
 BURST_SIZES=(4 8 16 32 64 128)
+UNIT_SIZES=(64 128 256 512 1024)
 
 # Colors for output
 RED='\033[0;31m'
@@ -115,6 +116,7 @@ start_server() {
 # Function to run client test
 run_client_test() {
     local burst_size=$1
+    local unit_size=$2
     local client_log="$RESULTS_DIR/client_burst_${burst_size}.log"
     local client_results="$RESULTS_DIR/results_burst_${burst_size}.txt"
     
@@ -125,7 +127,7 @@ run_client_test() {
     sudo timeout "$TEST_DURATION" \
         "build/linux/${ARCH}/${RELEASE}/client" \
         -l 0-7 -a "$CLIENT_PCI" --file-prefix=client -- \
-        --tx-burst "$burst_size" --rx-burst "$burst_size" \
+        --tx-burst "$burst_size" --rx-burst "$burst_size" --size "$unit_size" \
         > "$client_log" 2>&1 || true
     
     # Extract metrics from client log
@@ -138,6 +140,7 @@ run_client_test() {
             awk '{sum += $2; count++} END {if(count > 0) print sum/count; else print 0}')
         
         echo "burst_size:$burst_size" >> "$client_results"
+        echo "unit_size:$unit_size" >> "$client_results"
         echo "avg_throughput:$avg_throughput" >> "$client_results"
         echo "test_duration:$TEST_DURATION" >> "$client_results"
         echo "timestamp:$(date '+%Y-%m-%d %H:%M:%S')" >> "$client_results"
@@ -151,6 +154,8 @@ run_client_test() {
 
 run_server_test() {
     local burst_size=$1
+    local unit_size=$2
+
     local server_log="$RESULTS_DIR/server_burst_${burst_size}.log"
     local server_results="$RESULTS_DIR/results_burst_${burst_size}.txt"
     
@@ -161,7 +166,7 @@ run_server_test() {
     sudo timeout "$TEST_DURATION" \
         "build/linux/${ARCH}/${RELEASE}/server" \
         -l 9-15 --file-prefix=server -- \
-        --tx-burst "$burst_size" --rx-burst "$burst_size" \
+        --tx-burst "$burst_size" --rx-burst "$burst_size" --size "$unit_size" \
         > "$server_log" 2>&1 || true
 
     # Extract metrics from server log
@@ -206,6 +211,7 @@ run_server_test() {
         avg_hit_rate=$(echo "$metrics" | awk '{print $2}')
 
         echo "burst_size:$burst_size" >> "$server_results"
+        echo "unit_size:$unit_size" >> "$server_results"
         echo "avg_throughput:$avg_throughput" >> "$server_results"
         echo "avg_hit_rate:$avg_hit_rate" >> "$server_results"
         echo "test_duration:$TEST_DURATION" >> "$server_results"
@@ -222,6 +228,7 @@ run_server_test() {
 # Function to run single burst size test
 run_burst_test() {
     local burst_size=$1
+    local unit_size=$2
     
     echo ""
     echo "========================================"
@@ -231,9 +238,9 @@ run_burst_test() {
 
     # Run client test
     if [[ "$MODE" == "client" ]]; then
-        run_client_test "$burst_size"
+        run_client_test "$burst_size" "$unit_size"
     elif [[ "$MODE" == "server" ]]; then
-        run_server_test "$burst_size"
+        run_server_test "$burst_size" "$unit_size"
     fi
     sleep 2
     
@@ -261,35 +268,38 @@ generate_summary() {
             printf "%-12s %-20s %-15s %-15s\n" "Burst Size" "Avg Throughput" "Avg Hit Rate" "Status"
             printf "%-12s %-20s %-15s %-15s\n" "----------" "---------------" "------------" "------"
         else
-            printf "%-12s %-20s %-15s\n" "Burst Size" "Avg Throughput" "Status"
-            printf "%-12s %-20s %-15s\n" "----------" "---------------" "------"
+            printf "%-12s %-20s %-15s %-15s\n" "Burst Size" "Avg Throughput" "Unit Size" "Status"
+            printf "%-12s %-20s %-15s %-15s\n" "----------" "---------------" "------------" "------"
         fi
         
         for burst_size in "${BURST_SIZES[@]}"; do
-            local results_file="$RESULTS_DIR/results_burst_${burst_size}.txt"
-            if [[ -f "$results_file" ]]; then
-                local throughput=$(grep "avg_throughput:" "$results_file" | cut -d: -f2)
-                if [[ -n "$throughput" ]] && [[ "$throughput" != "0" ]]; then
-                    if [[ "$MODE" == "server" ]]; then
-                        local hit_rate=$(grep "avg_hit_rate:" "$results_file" | cut -d: -f2)
-                        printf "%-12s %-20.0f %-15.6f %-15s\n" "$burst_size" "$throughput" "$hit_rate" "SUCCESS"
+            for unit_size in "${UNIT_SIZES[@]}"; do 
+                local results_file="$RESULTS_DIR/results_burst_${burst_size}_${unit_size}.txt"
+                if [[ -f "$results_file" ]]; then
+                    local throughput=$(grep "avg_throughput:" "$results_file" | cut -d: -f2)
+                    if [[ -n "$throughput" ]] && [[ "$throughput" != "0" ]]; then
+                        if [[ "$MODE" == "server" ]]; then
+                            local hit_rate=$(grep "avg_hit_rate:" "$results_file" | cut -d: -f2)
+                            printf "%-12s %-20.0f %-15.6f %-15s\n" "$burst_size" "$throughput" "$hit_rate" "SUCCESS"
+                        else
+                            local unit_size=$(grep "unit_size:" "$results_file" | cut -d: -f2)
+                            printf "%-12s %-20.0f %-15s %-15s\n" "$burst_size" "$throughput" "$unit_size" "SUCCESS"
+                        fi
                     else
-                        printf "%-12s %-20.0f %-15s\n" "$burst_size" "$throughput" "SUCCESS"
+                        if [[ "$MODE" == "server" ]]; then
+                            printf "%-12s %-20s %-15s %-15s\n" "$burst_size" "N/A" "N/A" "FAILED"
+                        else
+                            printf "%-12s %-20s %-15s\n" "$burst_size" "N/A" "FAILED"
+                        fi
                     fi
                 else
                     if [[ "$MODE" == "server" ]]; then
-                        printf "%-12s %-20s %-15s %-15s\n" "$burst_size" "N/A" "N/A" "FAILED"
+                        printf "%-12s %-20s %-15s %-15s\n" "$burst_size" "N/A" "N/A" "NOT_RUN"
                     else
-                        printf "%-12s %-20s %-15s\n" "$burst_size" "N/A" "FAILED"
+                        printf "%-12s %-20s %-15s\n" "$burst_size" "N/A" "NOT_RUN"
                     fi
                 fi
-            else
-                if [[ "$MODE" == "server" ]]; then
-                    printf "%-12s %-20s %-15s %-15s\n" "$burst_size" "N/A" "N/A" "NOT_RUN"
-                else
-                    printf "%-12s %-20s %-15s\n" "$burst_size" "N/A" "NOT_RUN"
-                fi
-            fi
+            done
         done
         
         echo ""

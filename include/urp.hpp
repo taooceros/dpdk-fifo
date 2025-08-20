@@ -75,6 +75,8 @@ struct EndpointConfig {
 
   uint32_t tx_burst_size = DEFAULT_BURST_SIZE;
   uint32_t rx_burst_size = DEFAULT_BURST_SIZE;
+
+  size_t unit_size = 64;
 };
 
 class URPEndpoint {
@@ -220,7 +222,7 @@ public:
 private:
   struct rte_mbuf *build_data_frame(const rte_ether_addr *dst_mac,
                                     Payload *payload, uint32_t seq) {
-    size_t frame_len = 100;
+    size_t frame_len = cfg_.unit_size;
     struct rte_mbuf *m = rte_pktmbuf_alloc(mbuf_pool_);
     if (!m)
       return nullptr;
