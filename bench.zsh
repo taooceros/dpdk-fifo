@@ -123,12 +123,16 @@ run_client_test() {
     echo ""
     log "Running client test with burst size $burst_size for ${TEST_DURATION}s..."
     
+    echo sudo timeout "$TEST_DURATION" "build/linux/${ARCH}/${RELEASE}/client" \
+        -l 0-7 -a "$CLIENT_PCI" --file-prefix=client -- \
+        --tx-burst "$burst_size" --rx-burst "$burst_size" --size "$unit_size"
+
     # Start client and capture output
     sudo timeout "$TEST_DURATION" \
         "build/linux/${ARCH}/${RELEASE}/client" \
         -l 0-7 -a "$CLIENT_PCI" --file-prefix=client -- \
         --tx-burst "$burst_size" --rx-burst "$burst_size" --size "$unit_size" \
-        > "$client_log" 2>&1 || true
+        > "$client_log" 2>&1
     
     # Extract metrics from client log
     if [[ -f "$client_log" ]]; then
@@ -383,11 +387,13 @@ main() {
     
     # Run tests for each burst size
     local failed_tests=0
-    for burst_size in "${BURST_SIZES[@]}"; do
-        if ! run_burst_test "$burst_size"; then
-            ((failed_tests++))
-            warn "Test failed for burst size $burst_size"
-        fi
+    for unit_size in "${UNIT_SIZES[@]}"; do 
+        for burst_size in "${BURST_SIZES[@]}"; do
+            if ! run_burst_test "$burst_size" "$unit_size"; then
+                ((failed_tests++))
+                warn "Test failed for burst size $burst_size $unit_size"
+            fi
+        done
     done
     
     # Generate summary
