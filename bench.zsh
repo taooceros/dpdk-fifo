@@ -117,8 +117,8 @@ start_server() {
 run_client_test() {
     local burst_size=$1
     local unit_size=$2
-    local client_log="$RESULTS_DIR/client_burst_${burst_size}.log"
-    local client_results="$RESULTS_DIR/results_burst_${burst_size}.txt"
+    local client_log="$RESULTS_DIR/client_burst_${burst_size}_size_${unit_size}.log"
+    local client_results="$RESULTS_DIR/results_burst_${burst_size}_size_${unit_size}.txt"
     
     echo ""
     log "Running client test with burst size $burst_size for ${TEST_DURATION}s..."
@@ -160,8 +160,8 @@ run_server_test() {
     local burst_size=$1
     local unit_size=$2
 
-    local server_log="$RESULTS_DIR/server_burst_${burst_size}.log"
-    local server_results="$RESULTS_DIR/results_burst_${burst_size}.txt"
+    local server_log="$RESULTS_DIR/server_burst_${burst_size}_size_${unit_size}.log"
+    local server_results="$RESULTS_DIR/results_burst_${burst_size}_size_${unit_size}.txt"
     
     echo ""
     log "Running server test with burst size $burst_size for ${TEST_DURATION}s..."
@@ -278,7 +278,7 @@ generate_summary() {
         
         for burst_size in "${BURST_SIZES[@]}"; do
             for unit_size in "${UNIT_SIZES[@]}"; do 
-                local results_file="$RESULTS_DIR/results_burst_${burst_size}_${unit_size}.txt"
+                local results_file="$RESULTS_DIR/results_burst_${burst_size}_size_${unit_size}.txt"
                 if [[ -f "$results_file" ]]; then
                     local throughput=$(grep "avg_throughput:" "$results_file" | cut -d: -f2)
                     if [[ -n "$throughput" ]] && [[ "$throughput" != "0" ]]; then
@@ -313,21 +313,25 @@ generate_summary() {
         # Find best performing burst size
         local best_burst=0
         local best_throughput=0
-        for burst_size in "${BURST_SIZES[@]}"; do
-            local results_file="$RESULTS_DIR/results_burst_${burst_size}.txt"
-            if [[ -f "$results_file" ]]; then
-                local throughput=$(grep "avg_throughput:" "$results_file" | cut -d: -f2)
-                if [[ -n "$throughput" ]] && (( $(echo "$throughput > $best_throughput" | bc -l) )); then
-                    best_throughput=$throughput
-                    best_burst=$burst_size
+        for unit_size in "${UNIT_SIZES[@]}"; do
+            for burst_size in "${BURST_SIZES[@]}"; do
+                local results_file="$RESULTS_DIR/results_burst_${burst_size}_size_${unit_size}.txt"
+                if [[ -f "$results_file" ]]; then
+                    local throughput=$(grep "avg_throughput:" "$results_file" | cut -d: -f2)
+                    if [[ -n "$throughput" ]] && (( $(echo "$throughput > $best_throughput" | bc -l) )); then
+                        best_throughput=$throughput
+                        best_burst=$burst_size
+                        best_unit_size=$unit_size
+                    fi
                 fi
-            fi
+            done
         done
         
         if [[ "$best_burst" != "0" ]]; then
             echo "Best Performance:"
             echo "Burst Size: $best_burst"
             echo "Throughput: $(printf "%.0f" "$best_throughput") packets/sec"
+            echo "Unit Size: $best_unit_size"
         fi
         
     } > "$summary_file"
