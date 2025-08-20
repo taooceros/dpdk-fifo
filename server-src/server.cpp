@@ -31,6 +31,9 @@ static int responder_thread_main(void *arg) {
   const uint64_t report_interval = 1000000; // report every 1M packets
   const uint32_t burst_size = 1024;
   Payload *msg[burst_size];
+  for (uint32_t i = 0; i < burst_size; ++i) {
+    msg[i] = (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
+  }
   struct rte_ring_zc_data zcd;
   size_t counter = 0;
   size_t counter_hit = 0;
@@ -52,6 +55,9 @@ static int responder_thread_main(void *arg) {
 
       uint16_t num_enqueued = 0;
       uint32_t free_space;
+
+      
+
       while ((num_enqueued +=
               rte_ring_enqueue_burst(out, (void **)msg, count - num_enqueued,
                                      &free_space)) < count) {

@@ -82,13 +82,20 @@ struct EndpointConfig {
 class URPEndpoint {
 public:
   explicit URPEndpoint(const EndpointConfig &cfg) {
-    mbuf_pool_ = rte_pktmbuf_pool_create("URP_MBUF_POOL", 1024, 128, 0, 2048,
-                                         rte_socket_id());
-    if (!mbuf_pool_)
-      panic("%s %s", "Failed to create URP mbuf pool", rte_strerror(rte_errno));
+    tx_mbuf_pool_ = rte_pktmbuf_pool_create("URP_TX_MBUF_POOL", 2048, 128, 0,
+                                            2048, rte_socket_id());
+    if (!tx_mbuf_pool_)
+      panic("%s %s", "Failed to create URP TX mbuf pool",
+            rte_strerror(rte_errno));
+
+    rx_mbuf_pool_ = rte_pktmbuf_pool_create("URP_RX_MBUF_POOL", 2048, 128, 0,
+                                            2048, rte_socket_id());
+    if (!rx_mbuf_pool_)
+      panic("%s %s", "Failed to create URP RX mbuf pool",
+            rte_strerror(rte_errno));
 
     cfg_ = cfg;
-    port_init(cfg.port_id, mbuf_pool_);
+    port_init(cfg.port_id, rx_mbuf_pool_);
     rte_eth_macaddr_get(cfg.port_id, &src_mac_);
     peer_mac_default_ = cfg.default_peer_mac;
 
@@ -149,12 +156,20 @@ public:
              cfg_.tx_burst_size, nullptr)) != 0) {
       const rte_ether_addr *dst =
           have_learned_peer_ ? &learned_peer_ : &peer_mac_default_;
+
+      if (cfg_.unit_size < sizeof(urp_hdr) + sizeof(struct rte_ether_hdr)) {
+        panic("Unit size is too small");
+      }
+
+      tx_payloads_ptr_buf[0]->size =
+          cfg_.unit_size - sizeof(urp_hdr) - sizeof(struct rte_ether_hdr);
       for (uint32_t i = 0; i < nb_payloads; ++i) {
         struct rte_mbuf *m =
-            build_data_frame(dst, tx_payloads_ptr_buf[i], tx_seq_++);
-        if (m) {
-          tx_bufs_ptr_buf[i] = m;
+            build_data_frame(dst, tx_payloads_ptr_buf[0], tx_seq_++);
+        if (!m) {
+          panic("Failed to build data frame");
         }
+        tx_bufs_ptr_buf[i] = m;
       }
       uint16_t sent = 0;
 
@@ -173,7 +188,7 @@ public:
     for (uint16_t i = 0; i < nb_rx; ++i) {
       struct rte_mbuf *m = rx_bufs_ptr_buf[i];
       urp_hdr rcv = parse_frame(m);
-      if (rcv.opcode == OPCODE_DATA) {
+      if (rcv.opcode == OPCODE_DATA || true) {
         // Learn peer MAC from frame src
         struct rte_ether_hdr *eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
         if (!have_learned_peer_) {
@@ -215,38 +230,42 @@ public:
       rte_ring_free(inbound_ring_);
     if (outbound_ring_)
       rte_ring_free(outbound_ring_);
-    if (mbuf_pool_)
-      rte_mempool_free(mbuf_pool_);
+    if (rx_mbuf_pool_)
+      rte_mempool_free(rx_mbuf_pool_);
+    if (tx_mbuf_pool_)
+      rte_mempool_free(tx_mbuf_pool_);
   }
 
 private:
   struct rte_mbuf *build_data_frame(const rte_ether_addr *dst_mac,
                                     Payload *payload, uint32_t seq) {
-    size_t frame_len = cfg_.unit_size;
-    struct rte_mbuf *m = rte_pktmbuf_alloc(mbuf_pool_);
+    size_t frame_len =
+        sizeof(struct rte_ether_hdr) + sizeof(urp_hdr) + payload->size;
+    struct rte_mbuf *m = rte_pktmbuf_alloc(tx_mbuf_pool_);
     if (!m)
-      return nullptr;
+      panic("Failed to allocate mbuf");
 
-    uint8_t *data = rte_pktmbuf_mtod(m, uint8_t *);
     rte_pktmbuf_reset_headroom(m);
-    if (rte_pktmbuf_append(m, frame_len) == NULL) {
+    char *data = rte_pktmbuf_append(m, frame_len);
+    if (!data) {
       rte_pktmbuf_free(m);
-      return nullptr;
+      panic("Failed to append mbuf");
     }
 
+    uint8_t *data2 = rte_pktmbuf_mtod(m, uint8_t *);
     struct rte_ether_hdr *eth = (struct rte_ether_hdr *)data;
     rte_ether_addr_copy(dst_mac, &eth->dst_addr);
     rte_ether_addr_copy(&src_mac_, &eth->src_addr);
     eth->ether_type = rte_cpu_to_be_16(ETH_TYPE);
 
     urp_hdr *uh = (urp_hdr *)(eth + 1);
-    // uh->version = rte_cpu_to_be_16(1);
+    uh->version = rte_cpu_to_be_16(1);
     uh->opcode = rte_cpu_to_be_16(OPCODE_DATA);
-    // uh->seq = rte_cpu_to_be_32(seq);
-    // uh->payload_len = rte_cpu_to_be_16(16);
-    if (payload->size > 0) {
-      // rte_memcpy(uh->payload, payload->data, payload->size);
-    }
+    uh->seq = rte_cpu_to_be_32(seq);
+    uh->payload_len = rte_cpu_to_be_16(payload->size);
+    // if (payload->size > 0) {
+    //   rte_memcpy(uh->payload, payload->data, payload->size);
+    // }
     return m;
   }
 
@@ -284,7 +303,8 @@ private:
   rte_ring *outbound_ring_{nullptr};
 
   EndpointConfig cfg_;
-  struct rte_mempool *mbuf_pool_{nullptr};
+  struct rte_mempool *tx_mbuf_pool_{nullptr};
+  struct rte_mempool *rx_mbuf_pool_{nullptr};
   rte_ether_addr src_mac_{};
   rte_ether_addr peer_mac_default_{};
   rte_ether_addr learned_peer_{};

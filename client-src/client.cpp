@@ -129,7 +129,7 @@ int main(int argc, char **argv) {
     if (rte_ring_sc_dequeue(ep->inbound_ring(), (void **)&msg) == 0) {
       // Compute RTT latency using embedded TSC timestamp
       count++;
-      if (msg->size >= sizeof(uint64_t)) {
+      if (msg->size > 0) {
         uint64_t send_tsc = 0;
         rte_memcpy(&send_tsc, msg->data, sizeof(send_tsc));
         uint64_t now = rte_get_tsc_cycles();
