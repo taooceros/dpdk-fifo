@@ -14,7 +14,8 @@
 using namespace urp;
 
 static int producer_thread_main(void *arg) {
-  rte_ring *out = reinterpret_cast<rte_ring *>(arg);
+  URPEndpoint *ep = reinterpret_cast<URPEndpoint *>(arg);
+  rte_ring *out = ep->outbound_ring();
   uint32_t i = 0;
   uint32_t last_time = 0;
   printf("Producer thread running on lcore %u\n", rte_lcore_id());
@@ -26,12 +27,13 @@ static int producer_thread_main(void *arg) {
   for (uint32_t i = 0; i < 1024; ++i) {
     payloads[i] =
         (Payload *)rte_zmalloc(NULL, sizeof(Payload), RTE_CACHE_LINE_SIZE);
+
+    payloads[i]->size = ep->cfg().unit_size;
   }
 
   for (;;) {
     Payload *rec = payloads[i % 1024];
     // Embed send timestamp (TSC cycles) for latency measurement
-    rec->size = sizeof(uint64_t);
     uint64_t tsc = rte_get_tsc_cycles();
     rte_memcpy(rec->data, &tsc, sizeof(tsc));
     while (rte_ring_sp_enqueue(out, rec) == -ENOBUFS) {
@@ -117,7 +119,7 @@ int main(int argc, char **argv) {
     rte_exit(EXIT_FAILURE, "Not enough cores\n");
   }
   rte_eal_remote_launch((lcore_function_t *)producer_thread_main,
-                        ep->outbound_ring(), producer_lcore);
+                        ep, producer_lcore);
 
   // Optionally consume inbound DATA if server also sends
   uint64_t count = 0;

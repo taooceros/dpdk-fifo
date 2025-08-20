@@ -41,6 +41,7 @@ static int responder_thread_main(void *arg) {
     counter++;
     if ((count = rte_ring_dequeue_zc_burst_start(in, burst_size, &zcd,
                                                  nullptr)) > 0) {
+
       total_count += count;
       if (total_count - last_count > report_interval) {
         uint64_t now = rte_get_tsc_cycles();
@@ -56,7 +57,11 @@ static int responder_thread_main(void *arg) {
       uint16_t num_enqueued = 0;
       uint32_t free_space;
 
-      
+      auto size = ((Payload **)zcd.ptr1)[0]->size;
+
+      for (uint32_t i = 0; i < count; ++i) {
+        msg[i]->size = size;
+      }
 
       while ((num_enqueued +=
               rte_ring_enqueue_burst(out, (void **)msg, count - num_enqueued,

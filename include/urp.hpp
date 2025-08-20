@@ -133,6 +133,7 @@ public:
   URPEndpoint &operator=(const URPEndpoint &) = delete;
 
   // Rings for app usage
+  EndpointConfig cfg() const { return cfg_; }
   rte_ring *inbound_ring() const { return inbound_ring_; }
   rte_ring *outbound_ring() const { return outbound_ring_; }
 
@@ -157,15 +158,15 @@ public:
       const rte_ether_addr *dst =
           have_learned_peer_ ? &learned_peer_ : &peer_mac_default_;
 
-      if (cfg_.unit_size < sizeof(urp_hdr) + sizeof(struct rte_ether_hdr)) {
-        panic("Unit size is too small");
-      }
-
-      tx_payloads_ptr_buf[0]->size =
-          cfg_.unit_size - sizeof(urp_hdr) - sizeof(struct rte_ether_hdr);
       for (uint32_t i = 0; i < nb_payloads; ++i) {
+
+        if (tx_payloads_ptr_buf[i]->size <
+            sizeof(urp_hdr) + sizeof(struct rte_ether_hdr)) {
+          panic("Unit size is too small %d", tx_payloads_ptr_buf[i]->size);
+        }
+
         struct rte_mbuf *m =
-            build_data_frame(dst, tx_payloads_ptr_buf[0], tx_seq_++);
+            build_data_frame(dst, tx_payloads_ptr_buf[i], tx_seq_++);
         if (!m) {
           panic("Failed to build data frame");
         }
@@ -188,13 +189,17 @@ public:
     for (uint16_t i = 0; i < nb_rx; ++i) {
       struct rte_mbuf *m = rx_bufs_ptr_buf[i];
       urp_hdr rcv = parse_frame(m);
-      if (rcv.opcode == OPCODE_DATA || true) {
+      if (rcv.opcode == OPCODE_DATA) {
         // Learn peer MAC from frame src
         struct rte_ether_hdr *eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
         if (!have_learned_peer_) {
           rte_ether_addr_copy(&eth->src_addr, &learned_peer_);
           have_learned_peer_ = true;
         }
+
+        rx_payloads_ptr_buf[i]->size = rcv.payload_len;
+        // printf("rx_payloads_ptr_buf[i]->size: %d\n",
+        //        rx_payloads_ptr_buf[i]->size);
 
         // No sequence checking - accept all packets
         // auto payload = rx_payloads_buf[rx_payloads_buf_idx_++ % BURST_SIZE];
@@ -210,7 +215,7 @@ public:
       uint32_t num_enqueued = 0;
       while ((num_enqueued += rte_ring_sp_enqueue_burst(
                   inbound_ring_, (void **)rx_payloads_ptr_buf.data(),
-                  nb_rx - num_enqueued, nullptr)) < nb_rx) {
+                  nb_rx - (uint16_t)num_enqueued, nullptr)) < nb_rx) {
         num_rx_trials_++;
         if (num_enqueued == 0) {
           rte_pause();
@@ -274,16 +279,16 @@ private:
     uint8_t *data = rte_pktmbuf_mtod(m, uint8_t *);
     size_t data_len = rte_pktmbuf_pkt_len(m);
     // printf("data_len: %u\n", data_len);
-    if (data_len < 100)
-      return hdr;
+    if (data_len < sizeof(urp_hdr) + sizeof(struct rte_ether_hdr))
+      panic("Frame is too small");
 
     struct rte_ether_hdr *eth = (struct rte_ether_hdr *)data;
 
     urp_hdr *uh = (urp_hdr *)(eth + 1);
-    // hdr.seq = rte_be_to_cpu_32(uh->seq);
-    // hdr.version = rte_be_to_cpu_16(uh->version);
+    hdr.seq = rte_be_to_cpu_32(uh->seq);
+    hdr.version = rte_be_to_cpu_16(uh->version);
     hdr.opcode = rte_be_to_cpu_16(uh->opcode);
-    // hdr.payload_len = rte_be_to_cpu_16(uh->payload_len);
+    hdr.payload_len = rte_be_to_cpu_16(uh->payload_len);
 
     if (hdr.payload_len > MAX_PAYLOAD)
       hdr.payload_len = MAX_PAYLOAD;
